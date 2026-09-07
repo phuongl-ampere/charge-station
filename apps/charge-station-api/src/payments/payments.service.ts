@@ -227,7 +227,11 @@ export class PaymentsService {
         await orderRepository.save(payment.order);
         await paymentRepository.save(payment);
         await connectorRepository.save(connector);
-        return { success: true };
+        return {
+          success: true,
+          orderId: payment.order.id,
+          orderStatus: payment.order.status,
+        };
       }
 
       payment.status = PaymentTransactionStatus.PAID;

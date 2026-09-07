@@ -1,7 +1,7 @@
 import {
   Inject,
   Injectable,
-  InternalServerErrorException,
+  Logger,
   NotFoundException,
   Optional,
 } from "@nestjs/common";
@@ -28,6 +28,8 @@ export interface SessionStatus {
 
 @Injectable()
 export class ChargingService {
+  private readonly logger = new Logger(ChargingService.name);
+
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     @Optional()
@@ -91,12 +93,25 @@ export class ChargingService {
       return savedCommand.commandId;
     });
 
-    if (!this.commandDispatcher) {
-      throw new InternalServerErrorException(
-        "Device command dispatcher is unavailable",
-      );
-    }
-    await this.commandDispatcher.dispatch(commandId);
+    this.dispatchStopCommand(commandId);
     return { accepted: true };
+  }
+
+  private dispatchStopCommand(commandId: string): void {
+    if (!this.commandDispatcher) {
+      this.logger.error(
+        `Failed to dispatch stop command ${commandId}: dispatcher unavailable`,
+      );
+      return;
+    }
+
+    void this.commandDispatcher.dispatch(commandId).catch((error: unknown) => {
+      const errorDetails =
+        error instanceof Error ? (error.stack ?? error.message) : String(error);
+      this.logger.error(
+        `Failed to dispatch stop command ${commandId}`,
+        errorDetails,
+      );
+    });
   }
 }

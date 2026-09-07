@@ -57,6 +57,17 @@ export class ChargeGateway {
     );
   }
 
+  async authorizeSession(
+    sessionId: string,
+    accessToken: string,
+  ): Promise<void> {
+    const orderId = await this.resolveOrderId({
+      kind: "session",
+      sessionId,
+    });
+    await this.authorizeOrder(orderId, accessToken);
+  }
+
   @SubscribeMessage("subscribe")
   async subscribe(
     @ConnectedSocket() client: Pick<Socket, "join">,

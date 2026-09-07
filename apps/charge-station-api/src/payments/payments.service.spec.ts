@@ -240,4 +240,108 @@ describe("PaymentsService webhook processing", () => {
 
     expect(dataSource.transaction).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      webhookStatus: "FAILED",
+      paymentStatus: PaymentTransactionStatus.FAILED,
+      orderStatus: OrderStatus.PAYMENT_FAILED,
+    },
+    {
+      webhookStatus: "CANCELLED",
+      paymentStatus: PaymentTransactionStatus.FAILED,
+      orderStatus: OrderStatus.PAYMENT_FAILED,
+    },
+    {
+      webhookStatus: "EXPIRED",
+      paymentStatus: PaymentTransactionStatus.EXPIRED,
+      orderStatus: OrderStatus.EXPIRED,
+    },
+  ])(
+    "publishes payment.updated after persisting a $webhookStatus webhook transition",
+    async ({ webhookStatus, paymentStatus, orderStatus }) => {
+      const order = {
+        id: randomUUID(),
+        payosOrderCode: "100001",
+        amountVnd: 10000,
+        status: OrderStatus.PENDING_PAYMENT,
+        connector: { id: randomUUID() },
+      } as Order;
+      const payment = {
+        id: randomUUID(),
+        status: PaymentTransactionStatus.PENDING,
+        order,
+      } as PaymentTransaction;
+      const connector = { id: order.connector.id, status: "OCCUPIED" };
+      const paymentRepository = {
+        findOne: vi.fn().mockResolvedValue(payment),
+        save: vi.fn().mockImplementation(async (entity) => entity),
+      };
+      const orderRepository = {
+        save: vi.fn().mockImplementation(async (entity) => entity),
+      };
+      const connectorRepository = {
+        findOne: vi.fn().mockResolvedValue(connector),
+        save: vi.fn().mockImplementation(async (entity) => entity),
+      };
+      const manager = {
+        query: vi.fn().mockImplementation(async (query: string) => {
+          if (query.includes("FROM payment_transactions")) {
+            return [{ id: payment.id }];
+          }
+          if (query.includes("FROM connectors")) {
+            return [{ id: connector.id }];
+          }
+          throw new Error("Unexpected lock query");
+        }),
+        getRepository: vi.fn((entity) => {
+          if (entity === PaymentTransaction) return paymentRepository;
+          if (entity === Order) return orderRepository;
+          if (entity === Connector) return connectorRepository;
+          if (entity === ChargingSession || entity === DeviceCommand) return {};
+          throw new Error("Unexpected repository");
+        }),
+      };
+      let transactionCommitted = false;
+      const dataSource = {
+        transaction: vi.fn(async (callback) => {
+          const result = await callback(manager);
+          transactionCommitted = true;
+          return result;
+        }),
+      };
+      const gateway = {
+        publishOrder: vi.fn(() => {
+          expect(transactionCommitted).toBe(true);
+        }),
+      };
+      const service = new PaymentsService(
+        dataSource as unknown as DataSource,
+        {
+          verifyWebhook: vi.fn().mockReturnValue(true),
+        } as unknown as PayosClient,
+        undefined,
+        gateway as unknown as ChargeGateway,
+      );
+
+      await service.handleWebhook({
+        code: "01",
+        success: false,
+        signature: "valid",
+        data: {
+          orderCode: 100001,
+          amount: 10000,
+          status: webhookStatus,
+        },
+      });
+
+      expect(payment.status).toBe(paymentStatus);
+      expect(order.status).toBe(orderStatus);
+      expect(gateway.publishOrder).toHaveBeenCalledWith(
+        order.id,
+        "payment.updated",
+        orderStatus,
+      );
+    },
+  );
 });
