@@ -24,6 +24,7 @@ type StopReason =
 @Injectable()
 export class CommandsService {
   private readonly logger = new Logger(CommandsService.name);
+  private readonly eventQueues = new Map<string, Promise<void>>();
 
   constructor(
     @Inject(ChargeStationEventClient)
@@ -188,13 +189,22 @@ export class CommandsService {
       payload,
     };
 
-    try {
-      void this.eventClient.post(event).catch((error: unknown) => {
+    const previousDelivery =
+      this.eventQueues.get(event.sessionId) ?? Promise.resolve();
+    const delivery = previousDelivery.then(async () => {
+      try {
+        await this.eventClient.post(event);
+      } catch (error: unknown) {
         this.logEventDeliveryFailure(event, error);
-      });
-    } catch (error: unknown) {
-      this.logEventDeliveryFailure(event, error);
-    }
+      }
+    });
+
+    this.eventQueues.set(event.sessionId, delivery);
+    void delivery.then(() => {
+      if (this.eventQueues.get(event.sessionId) === delivery) {
+        this.eventQueues.delete(event.sessionId);
+      }
+    });
   }
 
   private logEventDeliveryFailure(event: DeviceEvent, error: unknown): void {

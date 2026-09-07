@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { StartChargingCommand } from "@charge-station/contracts";
+import type {
+  StartChargingCommand,
+  StopChargingCommand,
+} from "@charge-station/contracts";
 
 import { CommandsService } from "./commands.service";
 import type { ChargeStationEventClient } from "../events/charge-station-event.client";
@@ -14,6 +17,14 @@ function commandWithDuration(durationSeconds: number): StartChargingCommand {
     durationSeconds,
     expiresAt: new Date(Date.now() + durationSeconds * 1000).toISOString(),
     configVersion: 1,
+  };
+}
+
+function stopCommand(): StopChargingCommand {
+  return {
+    commandId: "stop-command-1",
+    sessionId: "session-1",
+    reason: "USER_REQUESTED",
   };
 }
 
@@ -89,6 +100,88 @@ describe("CommandsService", () => {
 
     expect(deviceState.getConnector("ST01-C01")).toBeUndefined();
     expect(eventClient.post).toHaveBeenCalledTimes(4);
+  });
+
+  it("serializes event delivery within a session when callbacks resolve at different times", async () => {
+    const postedTypes: string[] = [];
+    const resolvers = new Map<string, Array<() => void>>();
+    eventClient.post.mockImplementation((event) => {
+      postedTypes.push(event.type);
+      return new Promise<void>((resolve) => {
+        const typeResolvers = resolvers.get(event.type) ?? [];
+        typeResolvers.push(resolve);
+        resolvers.set(event.type, typeResolvers);
+      });
+    });
+
+    const release = (type: string, occurrence = 0) => {
+      resolvers.get(type)?.[occurrence]?.();
+    };
+
+    await service.start(commandWithDuration(3));
+    expect(postedTypes).toEqual(["COMMAND_ACCEPTED"]);
+
+    await vi.advanceTimersByTimeAsync(3100);
+    expect(postedTypes).toEqual(["COMMAND_ACCEPTED"]);
+
+    release("COMMAND_ACCEPTED");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(postedTypes).toEqual(["COMMAND_ACCEPTED", "RUNNING"]);
+
+    release("RUNNING");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(postedTypes).toEqual([
+      "COMMAND_ACCEPTED",
+      "RUNNING",
+      "HEARTBEAT",
+    ]);
+
+    release("HEARTBEAT");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(postedTypes).toEqual([
+      "COMMAND_ACCEPTED",
+      "RUNNING",
+      "HEARTBEAT",
+      "HEARTBEAT",
+    ]);
+
+    release("HEARTBEAT", 1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(postedTypes).toEqual([
+      "COMMAND_ACCEPTED",
+      "RUNNING",
+      "HEARTBEAT",
+      "HEARTBEAT",
+      "STOPPED",
+    ]);
+  });
+
+  it("clears heartbeat and expiry timers after a manual stop", async () => {
+    await service.start(commandWithDuration(3));
+    await vi.advanceTimersByTimeAsync(1100);
+
+    await expect(service.stop(stopCommand())).resolves.toMatchObject({
+      accepted: true,
+      status: "STOPPED",
+    });
+
+    const heartbeatCount = eventClient.post.mock.calls.filter(
+      ([event]) => event.type === "HEARTBEAT",
+    ).length;
+    const stoppedCount = eventClient.post.mock.calls.filter(
+      ([event]) => event.type === "STOPPED",
+    ).length;
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(
+      eventClient.post.mock.calls.filter(
+        ([event]) => event.type === "HEARTBEAT",
+      ),
+    ).toHaveLength(heartbeatCount);
+    expect(
+      eventClient.post.mock.calls.filter(([event]) => event.type === "STOPPED"),
+    ).toHaveLength(stoppedCount);
   });
 
   it("deduplicates a command without creating a second timer", async () => {
