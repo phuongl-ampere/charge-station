@@ -29,6 +29,7 @@ export class CommandsService {
   constructor(
     @Inject(ChargeStationEventClient)
     private readonly eventClient: ChargeStationEventClient,
+    @Inject(DeviceStateService)
     private readonly deviceState: DeviceStateService = new DeviceStateService(),
   ) {}
 

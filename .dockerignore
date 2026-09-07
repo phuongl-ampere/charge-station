@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.next/
+.git/
+.worktrees/
+.superpowers/
+.codebase-memory/
+playwright-report/
+test-results/

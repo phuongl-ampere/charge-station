@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: charge
       POSTGRES_PASSWORD: charge
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U charge -d charge_station"]
       interval: 5s
@@ -14,6 +14,113 @@ services:
       retries: 10
     volumes:
       - charge-station-postgres:/var/lib/postgresql/data
+
+  charge-station-api:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:4000
+    command:
+      [
+        "sh",
+        "-c",
+        "pnpm --filter @charge-station/api db:seed && pnpm --filter @charge-station/api start",
+      ]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://charge:charge@postgres:5432/charge_station
+      JWT_SECRET: development-jwt-secret-change-me
+      FRONTEND_URL: http://localhost:3000
+      CHARGE_STATION_API_URL: http://charge-station-api:4000
+      IOT_SERVICE_URL: http://iot-service:4001
+      SERVICE_TOKEN: local-service-token-change-me
+      PAYOS_MODE: mock
+      PAYOS_CLIENT_ID: local-client-id
+      PAYOS_API_KEY: local-api-key
+      PAYOS_CHECKSUM_KEY: local-checksum-key
+      PAYOS_MOCK_CHECKOUT_BASE_URL: http://localhost:4000
+      PAYOS_RETURN_URL: http://localhost:4000/payments/payos/return
+      PAYOS_CANCEL_URL: http://localhost:4000/payments/payos/cancel
+    ports:
+      - "127.0.0.1:4000:4000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  iot-service:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:4000
+    command: ["pnpm", "--filter", "@charge-station/iot-service", "start"]
+    depends_on:
+      charge-station-api:
+        condition: service_healthy
+    environment:
+      CHARGE_STATION_API_URL: http://charge-station-api:4000
+      SERVICE_TOKEN: local-service-token-change-me
+      MOCK_IOT_START_DELAY_MS: 250
+      MOCK_IOT_HEARTBEAT_MS: 1000
+      MOCK_IOT_FAILURE_MODE: none
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4001/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  web:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:4000
+    command:
+      [
+        "pnpm",
+        "--filter",
+        "@charge-station/web",
+        "start",
+        "--hostname",
+        "0.0.0.0",
+        "--port",
+        "3000",
+      ]
+    depends_on:
+      charge-station-api:
+        condition: service_healthy
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
 
 volumes:
   charge-station-postgres:

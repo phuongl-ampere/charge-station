@@ -36,6 +36,12 @@ Customer browser
 
 NestJS uses Socket.IO to publish updates to the frontend. The IoT Service is internal and is not exposed to the frontend: Charge Station sends commands to IoT Service, and IoT Service calls the internal Charge Station event endpoint to report acknowledgements and device state.
 
+## Local Runtime
+
+Docker Compose runs PostgreSQL, Charge Station API, IoT Service, and the Next.js web app locally. The API waits for PostgreSQL, runs migrations and the idempotent `ST01-C01` demo seed, then becomes healthy at `GET /health`; IoT exposes the same health shape at `GET /health`.
+
+Browser-facing URLs use `localhost`: web at `http://localhost:3000` and API at `http://localhost:4000`. The two backend services use Compose DNS exclusively: API calls `http://iot-service:4001` and IoT posts events to `http://charge-station-api:4000`. Local Compose defaults to `PAYOS_MODE=mock`, so payment-link creation and checkout make no external PayOS calls.
+
 ## Timer Ownership
 
 The IoT device is the source of truth for relay state and timing:
@@ -143,6 +149,14 @@ PAYOS_RETURN_URL
 PAYOS_CANCEL_URL
 ```
 
+For production, configure the PayOS dashboard webhook URL as:
+
+```text
+https://<public-api-host>/payments/payos/webhook
+```
+
+Set `PAYOS_RETURN_URL` and `PAYOS_CANCEL_URL` to `https://<public-api-host>/payments/payos/return` and `https://<public-api-host>/payments/payos/cancel`. These public callback URLs cannot be `localhost`. Only the verified webhook activates charging; return and cancel are browser display redirects and cannot change payment or charging state.
+
 ## IoT Service Mock Contract
 
 For the MVP, `iot-service` exposes internal REST APIs. Charge Station calls these APIs using a service token in development and mTLS or equivalent service authentication in production.
@@ -216,7 +230,7 @@ The mock IoT Service must simulate:
 - Automatic `STOPPED` when the timer expires.
 - Timeouts, offline devices, and command failures.
 
-When the REST mock is replaced by MQTT or a SIM-based protocol, only `IoTServiceClient` in Charge Station should change. The command and event contracts remain stable.
+When the REST mock is replaced by MQTT or a SIM-based protocol, the device-protocol replacement is isolated to IoT Service. Charge Station continues to use the same internal command and event contracts.
 
 ## PostgreSQL Data Model
 

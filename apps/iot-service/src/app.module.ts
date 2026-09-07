@@ -5,9 +5,10 @@ import { CommandsController } from "./commands/commands.controller.js";
 import { CommandsService } from "./commands/commands.service.js";
 import { DeviceStateService } from "./devices/device-state.service.js";
 import { ChargeStationEventClient } from "./events/charge-station-event.client.js";
+import { HealthController } from "./health.controller.js";
 
 @Module({
-  controllers: [CommandsController],
+  controllers: [CommandsController, HealthController],
   providers: [
     CommandsService,
     DeviceStateService,

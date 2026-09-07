@@ -3,6 +3,7 @@ import {
   CanActivate,
   Controller,
   ExecutionContext,
+  Inject,
   Injectable,
   Post,
   UnauthorizedException,
@@ -29,7 +30,10 @@ export class ServiceTokenGuard implements CanActivate {
 @Controller("internal/device-events")
 @UseGuards(ServiceTokenGuard)
 export class DeviceEventsController {
-  constructor(private readonly deviceEventsService: DeviceEventsService) {}
+  constructor(
+    @Inject(DeviceEventsService)
+    private readonly deviceEventsService: DeviceEventsService,
+  ) {}
 
   @Post()
   handle(@Body() body: unknown) {
