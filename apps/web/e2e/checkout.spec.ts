@@ -2,7 +2,8 @@ import { expect, test } from "@playwright/test";
 
 async function mockLocalApi(
   page: import("@playwright/test").Page,
-): Promise<void> {
+): Promise<{ authorizedOrderRead: () => boolean }> {
+  let sawAuthorizedOrderRead = false;
   await page.context().route("http://localhost:4000/**", async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
@@ -36,6 +37,16 @@ async function mockLocalApi(
       return;
     }
     if (method === "GET" && url.pathname === "/orders/ord_1") {
+      const authorization = route.request().headers()["authorization"];
+      if (authorization !== "Bearer local-order-token") {
+        await route.fulfill({
+          contentType: "application/json",
+          status: 401,
+          body: JSON.stringify({ message: "Missing order capability" }),
+        });
+        return;
+      }
+      sawAuthorizedOrderRead = true;
       await route.fulfill({
         contentType: "application/json",
         body: JSON.stringify({
@@ -59,12 +70,15 @@ async function mockLocalApi(
     }
     await route.fulfill({ status: 404, body: "mock route not found" });
   });
+  return {
+    authorizedOrderRead: () => sawAuthorizedOrderRead,
+  };
 }
 
 test("selects a duration, opens local PayOS checkout, and shows payment waiting", async ({
   page,
 }, testInfo) => {
-  await mockLocalApi(page);
+  const api = await mockLocalApi(page);
   await page.goto("/scan/ST01-C01");
 
   await page.getByRole("button", { name: "2 hours" }).click();
@@ -84,9 +98,13 @@ test("selects a duration, opens local PayOS checkout, and shows payment waiting"
   await checkout;
 
   await page.goto("/charge/ord_1");
+  await expect
+    .poll(() => page.evaluate(() => window.sessionStorage.getItem("charge-token:ord_1")))
+    .toBe("local-order-token");
   await expect(
     page.getByRole("heading", { name: "Waiting for payment" }),
   ).toBeVisible();
+  await expect.poll(api.authorizedOrderRead).toBe(true);
   await page.screenshot({
     path: testInfo.outputPath("payment-waiting.png"),
     fullPage: true,
