@@ -75,6 +75,18 @@ describe("internal command API", () => {
       .expect(401);
   });
 
+  it("fails closed when SERVICE_TOKEN is not configured", async () => {
+    delete process.env.SERVICE_TOKEN;
+
+    await request(app.getHttpServer())
+      .post("/internal/commands/start")
+      .set("X-Service-Token", "local-service-token-change-me")
+      .send(startCommand("command-missing-token"))
+      .expect(401);
+
+    process.env.SERVICE_TOKEN = "test-service-token";
+  });
+
   it("deduplicates commands and rejects an occupied connector", async () => {
     const first = await request(app.getHttpServer())
       .post("/internal/commands/start")

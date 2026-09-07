@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import type {
   DeviceEvent,
   StartChargingCommand,
@@ -14,9 +14,17 @@ import {
 import { ChargeStationEventClient } from "../events/charge-station-event.client.js";
 
 type FailureMode = "none" | "timeout" | "offline" | "command_failed";
+type StopReason =
+  | StopChargingCommand["reason"]
+  | "TIMER_EXPIRED"
+  | "TIMEOUT"
+  | "COMMAND_FAILED"
+  | "DEVICE_OFFLINE";
 
 @Injectable()
 export class CommandsService {
+  private readonly logger = new Logger(CommandsService.name);
+
   constructor(
     @Inject(ChargeStationEventClient)
     private readonly eventClient: ChargeStationEventClient,
@@ -52,13 +60,13 @@ export class CommandsService {
     }
 
     const state = this.deviceState.add(command, this.deviceIdFor(command));
-    await this.postEvent(state, "COMMAND_ACCEPTED", {
+    state.startTimer = setTimeout(() => {
+      this.activate(state);
+    }, this.startDelayMs());
+
+    this.postEvent(state, "COMMAND_ACCEPTED", {
       relayState: state.relayState,
     });
-
-    state.startTimer = setTimeout(() => {
-      void this.activate(state);
-    }, this.startDelayMs());
 
     return this.acceptedResponse(state);
   }
@@ -71,7 +79,7 @@ export class CommandsService {
 
     const state = this.deviceState.getSession(command.sessionId);
     if (!state) {
-      const response = {
+      const response: CommandResponse = {
         commandId: command.commandId,
         accepted: false,
         deviceId: "unknown",
@@ -82,18 +90,18 @@ export class CommandsService {
     }
 
     this.deviceState.stop(state);
-    const response = {
+    const response: CommandResponse = {
       commandId: command.commandId,
       accepted: true,
       deviceId: state.deviceId,
       status: "STOPPED",
     };
     this.deviceState.saveStopResponse(command.commandId, response);
-    await this.postStopped(state, command.reason);
+    this.postStopped(state, command.reason);
     return response;
   }
 
-  private async activate(state: DeviceRuntimeState): Promise<void> {
+  private activate(state: DeviceRuntimeState): void {
     if (state.status !== "STARTING") {
       return;
     }
@@ -102,12 +110,12 @@ export class CommandsService {
     if (failureMode !== "none") {
       this.deviceState.stop(state);
       if (failureMode === "offline") {
-        await this.postEvent(state, "DEVICE_OFFLINE", {
+        this.postEvent(state, "DEVICE_OFFLINE", {
           reason: "DEVICE_OFFLINE",
           relayState: state.relayState,
         });
       } else {
-        await this.postEvent(state, "COMMAND_FAILED", {
+        this.postEvent(state, "COMMAND_FAILED", {
           reason: failureMode === "timeout" ? "TIMEOUT" : "COMMAND_FAILED",
           relayState: state.relayState,
         });
@@ -118,10 +126,10 @@ export class CommandsService {
     state.status = "RUNNING";
     state.relayState = "ON";
     state.startedAt = Date.now();
-    await this.postEvent(state, "RUNNING", {
-      remainingSeconds: state.command.durationSeconds,
-      relayState: state.relayState,
-    });
+
+    state.stopTimer = setTimeout(() => {
+      this.expire(state);
+    }, state.command.durationSeconds * 1000);
 
     state.heartbeatTimer = setInterval(() => {
       const remainingSeconds = Math.max(
@@ -132,46 +140,44 @@ export class CommandsService {
             1000,
         ),
       );
-      void this.postEvent(state, "HEARTBEAT", {
+      this.postEvent(state, "HEARTBEAT", {
         remainingSeconds,
         relayState: state.relayState,
       });
     }, this.heartbeatIntervalMs());
 
-    state.stopTimer = setTimeout(() => {
-      void this.expire(state);
-    }, state.command.durationSeconds * 1000);
+    this.postEvent(state, "RUNNING", {
+      remainingSeconds: state.command.durationSeconds,
+      relayState: state.relayState,
+    });
   }
 
-  private async expire(state: DeviceRuntimeState): Promise<void> {
+  private expire(state: DeviceRuntimeState): void {
     if (state.status !== "RUNNING" || state.stoppedEventSent) {
       return;
     }
 
     this.deviceState.stop(state);
-    await this.postStopped(state, "TIMER_EXPIRED");
+    this.postStopped(state, "TIMER_EXPIRED");
   }
 
-  private async postStopped(
-    state: DeviceRuntimeState,
-    reason: string,
-  ): Promise<void> {
+  private postStopped(state: DeviceRuntimeState, reason: StopReason): void {
     if (state.stoppedEventSent) {
       return;
     }
     state.stoppedEventSent = true;
-    await this.postEvent(state, "STOPPED", {
+    this.postEvent(state, "STOPPED", {
       reason,
       relayState: state.relayState,
     });
   }
 
-  private async postEvent(
+  private postEvent(
     state: DeviceRuntimeState,
     type: DeviceEvent["type"],
     payload: Record<string, unknown>,
-  ): Promise<void> {
-    await this.eventClient.post({
+  ): void {
+    const event: DeviceEvent = {
       eventId: randomUUID(),
       commandId: state.command.commandId,
       sessionId: state.command.sessionId,
@@ -180,7 +186,22 @@ export class CommandsService {
       type,
       occurredAt: new Date().toISOString(),
       payload,
-    });
+    };
+
+    try {
+      void this.eventClient.post(event).catch((error: unknown) => {
+        this.logEventDeliveryFailure(event, error);
+      });
+    } catch (error: unknown) {
+      this.logEventDeliveryFailure(event, error);
+    }
+  }
+
+  private logEventDeliveryFailure(event: DeviceEvent, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.logger.warn(
+      `Failed to deliver ${event.type} device event: ${message}`,
+    );
   }
 
   private acceptedResponse(state: DeviceRuntimeState): CommandResponse {

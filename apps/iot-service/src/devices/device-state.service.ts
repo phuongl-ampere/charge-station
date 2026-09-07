@@ -3,6 +3,7 @@ import type { StartChargingCommand } from "@charge-station/contracts";
 
 export type DeviceRuntimeStatus = "STARTING" | "RUNNING" | "STOPPED";
 export type RelayState = "ON" | "OFF";
+export type CommandResponseStatus = "ACCEPTED" | "REJECTED" | "STOPPED";
 
 export interface DeviceRuntimeState {
   command: StartChargingCommand;
@@ -20,7 +21,7 @@ export interface CommandResponse {
   commandId: string;
   accepted: boolean;
   deviceId: string;
-  status: string;
+  status: CommandResponseStatus;
 }
 
 @Injectable()

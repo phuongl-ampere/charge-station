@@ -10,11 +10,10 @@ import type { Request } from "express";
 export class ServiceTokenGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<Request>();
-    const expectedToken =
-      process.env.SERVICE_TOKEN ?? "local-service-token-change-me";
+    const expectedToken = process.env.SERVICE_TOKEN;
     const providedToken = request.header("X-Service-Token");
 
-    if (!providedToken || providedToken !== expectedToken) {
+    if (!expectedToken || !providedToken || providedToken !== expectedToken) {
       throw new UnauthorizedException("A valid service token is required");
     }
 
