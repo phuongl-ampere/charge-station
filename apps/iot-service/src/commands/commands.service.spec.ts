@@ -1,3 +1,4 @@
+import { Logger } from "@nestjs/common";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   StartChargingCommand,
@@ -35,6 +36,7 @@ describe("CommandsService", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
     eventClient = {
       post: vi.fn().mockResolvedValue(undefined),
     };
@@ -46,6 +48,7 @@ describe("CommandsService", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
