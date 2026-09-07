@@ -109,6 +109,13 @@ export class DeviceEventsService {
       let saveSession = false;
       let saveCommand = false;
       let saveConnector = false;
+      if (
+        !session.lastDeviceEventAt ||
+        occurredAt.valueOf() > session.lastDeviceEventAt.valueOf()
+      ) {
+        session.lastDeviceEventAt = occurredAt;
+        saveSession = true;
+      }
       switch (event.type) {
         case "COMMAND_ACCEPTED":
           if (session.status === ChargingSessionStatus.PENDING) {
@@ -129,19 +136,23 @@ export class DeviceEventsService {
           }
           break;
         case "HEARTBEAT":
+          session.estimatedRemainingSeconds = readRemainingSeconds(
+            event.payload,
+          );
+          session.operationalWarning = null;
+          saveSession = true;
           break;
         case "STOPPED":
-          if (
-            session.status === ChargingSessionStatus.STARTING ||
-            session.status === ChargingSessionStatus.CHARGING
-          ) {
+          if (isNonterminalSessionStatus(session.status)) {
             session.status =
               event.payload.reason === "TIMER_EXPIRED"
                 ? ChargingSessionStatus.COMPLETED
                 : ChargingSessionStatus.CANCELLED;
             session.stoppedAt = occurredAt;
-            session.connector.status = ConnectorStatus.AVAILABLE;
             saveSession = true;
+          }
+          if (session.connector.status !== ConnectorStatus.AVAILABLE) {
+            session.connector.status = ConnectorStatus.AVAILABLE;
             saveConnector = true;
           }
           break;
@@ -159,6 +170,8 @@ export class DeviceEventsService {
           }
           break;
         case "DEVICE_OFFLINE":
+          session.operationalWarning = "DEVICE_OFFLINE";
+          saveSession = true;
           break;
       }
 
@@ -175,6 +188,14 @@ export class DeviceEventsService {
       return { accepted: true, duplicate: false };
     });
   }
+}
+
+function isNonterminalSessionStatus(status: ChargingSessionStatus): boolean {
+  return (
+    status !== ChargingSessionStatus.COMPLETED &&
+    status !== ChargingSessionStatus.CANCELLED &&
+    status !== ChargingSessionStatus.START_FAILED
+  );
 }
 
 function payloadForPersistence(

@@ -125,3 +125,66 @@ The new client tests stub `fetch` in-process. The service-token tests invoke
 the Nest guard with an in-memory request context. Existing API e2e tests use
 their local pg-mem setup. No production or test request targets an external
 host.
+
+## Review Findings Remediation
+
+- `DeviceCommand.nextAttemptAt` now persists the due time for each retry.
+  The dispatcher records retry counts and 1, 5, and 20 second due times before
+  waiting, resumes pending commands at their stored due time during bootstrap,
+  and preserves the original command ID, duration, and expiry.
+- The dispatcher retries only `IotTransportError`. Invalid persisted command
+  payloads, invalid retry schedules, missing or invalid IoT configuration,
+  rejected responses, and malformed successful responses mark the command
+  `FAILED` without another transport retry.
+- `STOPPED` now transitions every nonterminal session state, including
+  `PENDING`, `STOPPING`, and legacy `DEVICE_OFFLINE`, to a final result. Later
+  `COMMAND_ACCEPTED` and `RUNNING` events cannot revive a completed session.
+  The connector is released only by a validated `STOPPED` event, including a
+  late relay-off confirmation after `START_FAILED`.
+- Migration `002-device-command-retry-and-session-state` adds
+  `device_commands.next_attempt_at` and persisted charging-session current
+  fields: `estimated_remaining_seconds`, `last_device_event_at`, and
+  `operational_warning`. Heartbeats update the remaining estimate and event
+  time; offline events record the warning and event time.
+- The quote-only formatting churn in `data-source.ts` was reverted. Its diff
+  against the pre-Task-6 baseline contains only the required command status,
+  migration registration, and new persistence fields.
+
+## Review TDD Evidence
+
+1. Red: durable retry, bootstrap resume, invalid payload, terminal stop,
+   session-current-field, client classification, and migration tests failed
+   against the original Task 6 implementation. The failures showed missing
+   due times, immediate bootstrap dispatch, pending validation failures,
+   incomplete terminal handling, payload-only session state, raw fetch and JSON
+   errors, and the missing migration.
+2. Green: focused API tests passed after the durable state and event changes:
+
+   ```text
+   pnpm --filter @charge-station/api test -- command-dispatcher.service.spec.ts device-events.service.spec.ts
+   ```
+
+   Result: 2 files and 15 tests passed.
+
+3. Red: the invalid persisted retry-schedule regression left the command
+   `PENDING`.
+4. Green: after routing scheduled-attempt validation through `FAILED`:
+
+   ```text
+   pnpm --filter @charge-station/api test -- command-dispatcher.service.spec.ts
+   ```
+
+   Result: 1 file and 6 tests passed.
+
+## Review Verification
+
+- `pnpm --filter @charge-station/api test`
+  - Passed: 10 files, 35 tests.
+- `pnpm --filter @charge-station/api test:e2e`
+  - Passed: 4 files, 13 tests.
+- `pnpm --filter @charge-station/api build`
+  - Passed.
+- `pnpm --filter @charge-station/api lint`
+  - Passed.
+- `git diff --check`
+  - Passed with no whitespace errors.

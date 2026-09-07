@@ -15,6 +15,7 @@ import {
   ConnectorStatus,
   DeviceCommand,
   entities,
+  migrations,
   Order,
   OrderStatus,
   PaymentTransaction,
@@ -22,7 +23,6 @@ import {
   PricingPlan,
   Station,
 } from '../database/data-source.js';
-import { InitialSchemaMigration } from '../database/migrations/001-initial-schema.js';
 import { PayosClient, type PayosWebhookData } from './payos.client.js';
 import { PaymentsController } from './payments.controller.js';
 import { PaymentsService } from './payments.service.js';
@@ -47,7 +47,7 @@ describe('PayOS payment API', () => {
     dataSource = database.adapters.createTypeormDataSource({
       type: 'postgres',
       entities,
-      migrations: [InitialSchemaMigration],
+      migrations,
       migrationsRun: false,
     }) as DataSource;
     await dataSource.initialize();

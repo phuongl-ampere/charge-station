@@ -89,6 +89,93 @@ describe("DeviceEventsService", () => {
     expect(harness.connector.status).toBe(ConnectorStatus.AVAILABLE);
     expect(harness.connectorRepository.save).toHaveBeenCalledTimes(1);
   });
+
+  it("releases an occupied connector when STOPPED confirms relay-off after start failure", async () => {
+    const harness = createHarness(ChargingSessionStatus.START_FAILED);
+    const service = new DeviceEventsService(
+      harness.dataSource as unknown as DataSource,
+    );
+
+    await service.handle(
+      createEvent(harness.command.commandId, harness.session.id, {
+        type: "STOPPED",
+        payload: { reason: "COMMAND_FAILED", relayState: "OFF" },
+      }),
+    );
+
+    expect(harness.session.status).toBe(ChargingSessionStatus.START_FAILED);
+    expect(harness.connector.status).toBe(ConnectorStatus.AVAILABLE);
+    expect(harness.connectorRepository.save).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ChargingSessionStatus.PENDING,
+    ChargingSessionStatus.STARTING,
+    ChargingSessionStatus.CHARGING,
+    ChargingSessionStatus.STOPPING,
+    ChargingSessionStatus.DEVICE_OFFLINE,
+  ])(
+    "makes STOPPED terminal from %s and ignores later stale start events",
+    async (status) => {
+      const harness = createHarness(status);
+      const service = new DeviceEventsService(
+        harness.dataSource as unknown as DataSource,
+      );
+
+      await service.handle(
+        createEvent(harness.command.commandId, harness.session.id, {
+          type: "STOPPED",
+          payload: { reason: "TIMER_EXPIRED", relayState: "OFF" },
+        }),
+      );
+      await service.handle(
+        createEvent(harness.command.commandId, harness.session.id, {
+          type: "COMMAND_ACCEPTED",
+          payload: {},
+        }),
+      );
+      await service.handle(
+        createEvent(harness.command.commandId, harness.session.id, {
+          type: "RUNNING",
+          payload: { relayState: "ON" },
+        }),
+      );
+
+      expect(harness.session.status).toBe(ChargingSessionStatus.COMPLETED);
+      expect(harness.session.stoppedAt).toBeInstanceOf(Date);
+      expect(harness.connector.status).toBe(ConnectorStatus.AVAILABLE);
+      expect(harness.connectorRepository.save).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("persists current heartbeat and offline state on the charging session", async () => {
+    const harness = createHarness(ChargingSessionStatus.CHARGING);
+    const service = new DeviceEventsService(
+      harness.dataSource as unknown as DataSource,
+    );
+
+    await service.handle(
+      createEvent(harness.command.commandId, harness.session.id, {
+        type: "HEARTBEAT",
+        occurredAt: "2026-09-08T11:00:00.000Z",
+        payload: { remainingSeconds: 3600 },
+      }),
+    );
+    await service.handle(
+      createEvent(harness.command.commandId, harness.session.id, {
+        type: "DEVICE_OFFLINE",
+        occurredAt: "2026-09-08T11:01:00.000Z",
+        payload: { reason: "CONNECTION_LOST" },
+      }),
+    );
+
+    expect(harness.session).toMatchObject({
+      estimatedRemainingSeconds: 3600,
+      lastDeviceEventAt: new Date("2026-09-08T11:01:00.000Z"),
+      operationalWarning: "DEVICE_OFFLINE",
+    });
+    expect(harness.sessionRepository.save).toHaveBeenCalledTimes(2);
+  });
 });
 
 function createHarness(status: ChargingSessionStatus) {

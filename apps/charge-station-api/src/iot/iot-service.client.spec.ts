@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { IotServiceClient } from "./iot-service.client.js";
+import {
+  IotCommandRejectedError,
+  IotServiceClient,
+  IotTransportError,
+} from "./iot-service.client.js";
 
 const command = {
   commandId: "cmd_1",
@@ -69,5 +73,33 @@ describe("IotServiceClient", () => {
     );
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("classifies network failures as transport errors", async () => {
+    process.env.IOT_SERVICE_URL = "http://localhost:4100";
+    process.env.SERVICE_TOKEN = "local-token";
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
+
+    await expect(new IotServiceClient().start(command)).rejects.toBeInstanceOf(
+      IotTransportError,
+    );
+  });
+
+  it("classifies malformed successful responses as rejected commands", async () => {
+    process.env.IOT_SERVICE_URL = "http://localhost:4100";
+    process.env.SERVICE_TOKEN = "local-token";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("not-json", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(new IotServiceClient().start(command)).rejects.toBeInstanceOf(
+      IotCommandRejectedError,
+    );
   });
 });

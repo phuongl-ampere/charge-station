@@ -6,10 +6,10 @@ import {
   Connector,
   ConnectorStatus,
   entities,
+  migrations,
   PricingPlan,
   Station,
 } from './data-source.js';
-import { InitialSchemaMigration } from './migrations/001-initial-schema.js';
 import { isSeedEntrypoint, seedDatabase } from './seed.js';
 
 function createPgMemDataSource(): DataSource {
@@ -28,7 +28,7 @@ function createPgMemDataSource(): DataSource {
   return database.adapters.createTypeormDataSource({
     type: 'postgres',
     entities,
-    migrations: [InitialSchemaMigration],
+    migrations,
     migrationsRun: false,
   }) as DataSource;
 }
@@ -63,7 +63,7 @@ describe('database seed lifecycle', () => {
       .findOneBy({ code: 'ST01-C01' });
     const migrations = await dataSource.query('SELECT * FROM "migrations"');
 
-    expect(migrations).toHaveLength(1);
+    expect(migrations).toHaveLength(2);
     expect(station).toMatchObject({
       code: 'ST01',
       name: 'Demo Station',

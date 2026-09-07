@@ -6,12 +6,12 @@ import {
 } from "@nestjs/common";
 import { InjectDataSource } from "@nestjs/typeorm";
 import type { StartChargingCommand } from "@charge-station/contracts";
-import { DataSource } from "typeorm";
+import { DataSource, Repository } from "typeorm";
 
 import { DeviceCommand, DeviceCommandStatus } from "../database/data-source.js";
 import {
-  IotCommandRejectedError,
   IotServiceClient,
+  IotTransportError,
 } from "./iot-service.client.js";
 
 const RETRY_DELAYS_MS = [1_000, 5_000, 20_000] as const;
@@ -25,11 +25,13 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
     private readonly iotServiceClient: IotServiceClient,
   ) {}
 
-  onApplicationBootstrap(): void {
-    void this.dispatchPending().catch((error: unknown) => {
+  async onApplicationBootstrap(): Promise<void> {
+    try {
+      await this.dispatchPending();
+    } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`Unable to dispatch pending IoT commands: ${message}`);
-    });
+    }
   }
 
   async dispatch(commandId: string): Promise<void> {
@@ -45,32 +47,78 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
       return;
     }
 
-    const startCommand = toStartChargingCommand(command);
-    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
+    let startCommand: StartChargingCommand;
+    try {
+      startCommand = toStartChargingCommand(command);
+    } catch (error: unknown) {
+      await this.markFailed(command, commandRepository);
+      throw error;
+    }
+
+    while (true) {
+      try {
+        await this.waitForScheduledAttempt(command);
+      } catch (error: unknown) {
+        await this.markFailed(command, commandRepository);
+        throw error;
+      }
       try {
         await this.iotServiceClient.start(startCommand);
         command.status = DeviceCommandStatus.SENT;
+        command.nextAttemptAt = null;
         await commandRepository.save(command);
         return;
       } catch (error: unknown) {
-        if (
-          error instanceof IotCommandRejectedError ||
-          attempt === RETRY_DELAYS_MS.length
-        ) {
-          command.status = DeviceCommandStatus.FAILED;
-          await commandRepository.save(command);
+        if (!(error instanceof IotTransportError)) {
+          await this.markFailed(command, commandRepository);
           throw error;
         }
 
+        if (
+          !Number.isInteger(command.retryCount) ||
+          command.retryCount < 0 ||
+          command.retryCount >= RETRY_DELAYS_MS.length
+        ) {
+          await this.markFailed(command, commandRepository);
+          throw error;
+        }
+
+        const delayMs = RETRY_DELAYS_MS[command.retryCount];
         command.retryCount += 1;
+        command.nextAttemptAt = new Date(Date.now() + delayMs);
         await commandRepository.save(command);
-        await this.wait(RETRY_DELAYS_MS[attempt]);
+        await this.wait(delayMs);
       }
     }
   }
 
   protected wait(delayMs: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  private async waitForScheduledAttempt(command: DeviceCommand): Promise<void> {
+    if (!command.nextAttemptAt) {
+      return;
+    }
+
+    const scheduledAt = command.nextAttemptAt.valueOf();
+    if (Number.isNaN(scheduledAt)) {
+      throw new Error("Persisted device command has an invalid retry schedule");
+    }
+
+    const delayMs = scheduledAt - Date.now();
+    if (delayMs > 0) {
+      await this.wait(delayMs);
+    }
+  }
+
+  private async markFailed(
+    command: DeviceCommand,
+    commandRepository: Repository<DeviceCommand>,
+  ): Promise<void> {
+    command.status = DeviceCommandStatus.FAILED;
+    command.nextAttemptAt = null;
+    await commandRepository.save(command);
   }
 
   private async dispatchPending(): Promise<void> {

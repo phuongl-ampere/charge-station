@@ -9,12 +9,12 @@ import {
   ConnectorStatus,
   DeviceCommand,
   entities,
+  migrations,
   Order,
   PaymentTransaction,
   PricingPlan,
   Station,
 } from '../database/data-source.js';
-import { InitialSchemaMigration } from '../database/migrations/001-initial-schema.js';
 import { PayosClient, type PayosWebhookData } from './payos.client.js';
 import { PaymentsService } from './payments.service.js';
 
@@ -39,7 +39,7 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
       type: 'postgres',
       url: databaseUrl,
       entities,
-      migrations: [InitialSchemaMigration],
+      migrations,
       migrationsRun: false,
       extra: { options: `-c search_path=${schema},public` },
     });

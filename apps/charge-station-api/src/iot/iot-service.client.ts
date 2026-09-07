@@ -10,15 +10,21 @@ export class IotServiceClient {
       throw new Error("SERVICE_TOKEN must be configured");
     }
 
-    const response = await fetch(this.commandEndpoint(), {
-      method: "POST",
-      redirect: "error",
-      headers: {
-        "content-type": "application/json",
-        "x-service-token": serviceToken,
-      },
-      body: JSON.stringify(command),
-    });
+    const endpoint = this.commandEndpoint();
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: "POST",
+        redirect: "error",
+        headers: {
+          "content-type": "application/json",
+          "x-service-token": serviceToken,
+        },
+        body: JSON.stringify(command),
+      });
+    } catch {
+      throw new IotTransportError("IoT Service command request failed");
+    }
 
     if (!response.ok) {
       if (response.status >= 500) {
@@ -31,7 +37,14 @@ export class IotServiceClient {
       );
     }
 
-    const body: unknown = await response.json();
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new IotCommandRejectedError(
+        "IoT Service returned an invalid command response",
+      );
+    }
     if (
       !isAcceptedCommandResponse(body) ||
       body.commandId !== command.commandId
