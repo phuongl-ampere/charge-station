@@ -14,7 +14,7 @@ export default defineConfig({
   ],
   webServer: {
     command:
-      "NEXT_PUBLIC_API_URL=http://localhost:4000 NEXT_PUBLIC_MOCK_SOCKET=1 pnpm build && NEXT_PUBLIC_API_URL=http://localhost:4000 NEXT_PUBLIC_MOCK_SOCKET=1 pnpm start --hostname 127.0.0.1 --port 3100",
+      "NODE_OPTIONS=--localstorage-file=/tmp/charge-station-playwright.localstorage NEXT_PUBLIC_API_URL=http://localhost:4000 NEXT_PUBLIC_MOCK_SOCKET=1 pnpm build && NODE_OPTIONS=--localstorage-file=/tmp/charge-station-playwright.localstorage NEXT_PUBLIC_API_URL=http://localhost:4000 NEXT_PUBLIC_MOCK_SOCKET=1 pnpm start --hostname 127.0.0.1 --port 3100",
     url: "http://127.0.0.1:3100",
     reuseExistingServer: false,
   },
