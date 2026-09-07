@@ -95,3 +95,25 @@ Implemented and committed Task 5 on branch `feat/charge-station-mvp`.
 - `pnpm --filter @charge-station/iot-service test:e2e -- commands.e2e-spec.ts`: passed, 1 test file and 4 tests.
 - `pnpm --filter @charge-station/iot-service build`: passed.
 - `git diff --check`: passed before commit.
+
+## Task 5 Security Fix: Reject Callback Redirects
+
+- Updated `ChargeStationEventClient` to call `fetch` with `redirect: "error"`, preventing a local callback request from following a redirect and forwarding `X-Service-Token` to another host.
+- Added focused coverage for the redirect policy in `apps/iot-service/src/events/charge-station-event.client.spec.ts`.
+- Added regression coverage using the real event client in `apps/iot-service/src/commands/commands.service.spec.ts`; a redirect rejection is logged and contained by the existing serialized event delivery path while the accepted command completes and connector state is cleared.
+
+### TDD Evidence
+
+1. Red: `pnpm --filter @charge-station/iot-service test -- src/commands/commands.service.spec.ts src/events/charge-station-event.client.spec.ts`
+
+   Result: failed with 4 assertions because the request did not yet include `redirect: "error"`; the redirect-rejection delivery test passed.
+
+2. Green: `pnpm --filter @charge-station/iot-service test -- src/commands/commands.service.spec.ts src/events/charge-station-event.client.spec.ts`
+
+   Result: passed, 2 test files and 12 tests.
+
+### Verification
+
+- `pnpm --filter @charge-station/iot-service test`: passed, 2 test files and 12 tests.
+- `pnpm --filter @charge-station/iot-service build`: passed.
+- `git diff --check`: passed before commit.

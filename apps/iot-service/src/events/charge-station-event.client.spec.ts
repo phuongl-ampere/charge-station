@@ -54,6 +54,7 @@ describe("ChargeStationEventClient", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       `${apiUrl}/internal/device-events`,
       expect.objectContaining({
+        redirect: "error",
         headers: expect.objectContaining({
           "x-service-token": "test-service-token",
         }),

@@ -12,6 +12,7 @@ export class ChargeStationEventClient {
     const endpoint = this.callbackEndpoint();
     const response = await fetch(endpoint, {
       method: "POST",
+      redirect: "error",
       headers: {
         "content-type": "application/json",
         "x-service-token": serviceToken,

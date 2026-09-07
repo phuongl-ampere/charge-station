@@ -5,7 +5,7 @@ import type {
 } from "@charge-station/contracts";
 
 import { CommandsService } from "./commands.service";
-import type { ChargeStationEventClient } from "../events/charge-station-event.client";
+import { ChargeStationEventClient } from "../events/charge-station-event.client";
 import { DeviceStateService } from "../devices/device-state.service";
 
 function commandWithDuration(durationSeconds: number): StartChargingCommand {
@@ -100,6 +100,27 @@ describe("CommandsService", () => {
 
     expect(deviceState.getConnector("ST01-C01")).toBeUndefined();
     expect(eventClient.post).toHaveBeenCalledTimes(4);
+  });
+
+  it("safely handles a local callback redirect rejection", async () => {
+    process.env.SERVICE_TOKEN = "test-service-token";
+    process.env.CHARGE_STATION_API_URL = "http://localhost:4000";
+    const fetchMock = vi.fn().mockRejectedValue(
+      new TypeError("fetch failed because redirect mode is error"),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ChargeStationEventClient();
+    service = new CommandsService(client, deviceState);
+
+    await expect(service.start(commandWithDuration(2))).resolves.toMatchObject({
+      accepted: true,
+      status: "ACCEPTED",
+    });
+
+    await vi.advanceTimersByTimeAsync(2100);
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(deviceState.getConnector("ST01-C01")).toBeUndefined();
   });
 
   it("serializes event delivery within a session when callbacks resolve at different times", async () => {
