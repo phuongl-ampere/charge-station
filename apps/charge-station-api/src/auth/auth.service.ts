@@ -22,14 +22,25 @@ export interface CredentialsInput {
   password: string;
 }
 
+function getJwtSecret(): string {
+  const secret = process.env.JWT_SECRET?.trim();
+  if (!secret) {
+    throw new Error('JWT_SECRET must be set');
+  }
+
+  return secret;
+}
+
 @Injectable()
 export class AuthService {
-  private readonly jwtSecret = process.env.JWT_SECRET ?? 'development-jwt-secret-change-me';
+  private readonly jwtSecret: string;
 
   constructor(
     @InjectRepository(User)
     private readonly repository: Repository<User>,
-  ) {}
+  ) {
+    this.jwtSecret = getJwtSecret();
+  }
 
   async register(input: CredentialsInput): Promise<{ accessToken: string }> {
     const { email, password } = this.validateCredentials(input);
@@ -60,19 +71,27 @@ export class AuthService {
   }
 
   verifyToken(token: string): AuthTokenPayload {
-    const payload = jwt.verify(token, this.jwtSecret);
-    if (
-      typeof payload === 'string' ||
-      typeof payload.sub !== 'string' ||
-      typeof payload.role !== 'string'
-    ) {
+    try {
+      const payload = jwt.verify(token, this.jwtSecret);
+      if (
+        typeof payload === 'string' ||
+        typeof payload.sub !== 'string' ||
+        typeof payload.role !== 'string'
+      ) {
+        throw new UnauthorizedException('Invalid token');
+      }
+
+      return {
+        sub: payload.sub,
+        role: payload.role as UserRole,
+      };
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+
       throw new UnauthorizedException('Invalid token');
     }
-
-    return {
-      sub: payload.sub,
-      role: payload.role as UserRole,
-    };
   }
 
   private issueToken(user: User): string {

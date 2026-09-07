@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { randomUUID } from 'node:crypto';
+import { basename } from 'node:path';
 
 import {
   appDataSource,
@@ -65,6 +66,13 @@ export async function seedDatabase(dataSource = appDataSource): Promise<void> {
   }
 }
 
-if (process.argv[1]?.endsWith('seed.ts')) {
-  void seedDatabase();
+export function isSeedEntrypoint(entrypoint: string | undefined): boolean {
+  return entrypoint ? ['seed.ts', 'seed.js'].includes(basename(entrypoint)) : false;
+}
+
+if (isSeedEntrypoint(process.argv[1])) {
+  void seedDatabase().catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
 }
