@@ -9,6 +9,7 @@
     "db:seed": "pnpm build && node dist/database/seed.js",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:postgres": "vitest run --config vitest.postgres.config.ts",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

@@ -9,17 +9,25 @@ export type PaymentStatus =
 
 export type PaymentTransactionStatus = 'PENDING' | 'PAID' | 'FAILED' | 'EXPIRED';
 
+export interface PayosWebhookData {
+  orderCode: number | string;
+  amount: number;
+  paymentLinkId?: string;
+  status?: string;
+  [key: string]: string | number | boolean | null | undefined;
+}
+
 export interface PayosWebhook {
   code: string;
-  desc: string;
+  desc?: string;
   success: boolean;
-  data: Record<string, string | number | boolean | null>;
+  data: PayosWebhookData;
   signature: string;
 }
 
 export interface CreatePaymentLinkInput {
   orderCode: number;
-  amountVnd: number;
+  amount: number;
   description: string;
   returnUrl: string;
   cancelUrl: string;

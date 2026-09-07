@@ -5,6 +5,7 @@ import type { DataSource } from 'typeorm';
 
 import {
   ChargingSession,
+  Connector,
   DeviceCommand,
   Order,
   OrderStatus,
@@ -41,6 +42,10 @@ describe('PaymentsService webhook processing', () => {
     const orderRepository = {
       save: vi.fn().mockImplementation(async (entity) => entity),
     };
+    const connectorRepository = {
+      findOne: vi.fn().mockResolvedValue(pendingOrder.connector),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
     const sessionRepository = {
       create: vi.fn().mockImplementation((entity) => entity),
       save: vi.fn().mockImplementation(async (entity) => entity),
@@ -50,9 +55,17 @@ describe('PaymentsService webhook processing', () => {
       save: vi.fn().mockImplementation(async (entity) => entity),
     };
     const manager = {
+      query: vi.fn().mockImplementation(async (query: string) => {
+        if (query.includes('FROM payment_transactions'))
+          return [{ id: payment.id }];
+        if (query.includes('FROM connectors'))
+          return [{ id: pendingOrder.connector.id }];
+        throw new Error('Unexpected lock query');
+      }),
       getRepository: vi.fn((entity) => {
         if (entity === PaymentTransaction) return paymentRepository;
         if (entity === Order) return orderRepository;
+        if (entity === Connector) return connectorRepository;
         if (entity === ChargingSession) return sessionRepository;
         if (entity === DeviceCommand) return commandRepository;
         throw new Error('Unexpected repository');
@@ -83,8 +96,13 @@ describe('PaymentsService webhook processing', () => {
     await service.handleWebhook(body);
     await service.handleWebhook(body);
 
-    expect(paymentRepository.findOne).toHaveBeenCalledWith(
-      expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
+    expect(manager.query).toHaveBeenCalledWith(
+      expect.stringContaining('FROM payment_transactions'),
+      ['100001'],
+    );
+    expect(manager.query).toHaveBeenCalledWith(
+      expect.stringContaining('FROM connectors'),
+      [pendingOrder.connector.id],
     );
     expect(orderRepository.save).toHaveBeenCalledTimes(1);
     expect(paymentRepository.save).toHaveBeenCalledTimes(1);

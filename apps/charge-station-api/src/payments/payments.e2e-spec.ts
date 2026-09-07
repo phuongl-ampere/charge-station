@@ -6,7 +6,7 @@ import { Test } from '@nestjs/testing';
 import { getDataSourceToken } from '@nestjs/typeorm';
 import { DataType, newDb } from 'pg-mem';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { DataSource } from 'typeorm';
 
 import {
@@ -91,13 +91,25 @@ describe('PayOS payment API', () => {
     }).compile();
 
     app = module.createNestApplication();
-    app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
+    app.useGlobalPipes(
+      new ValidationPipe({ transform: true, whitelist: true }),
+    );
     await app.init();
   });
 
   afterAll(async () => {
     await app.close();
     await dataSource.destroy();
+  });
+
+  afterEach(async () => {
+    await dataSource.query('DELETE FROM "device_commands"');
+    await dataSource.query('DELETE FROM "charging_sessions"');
+    await dataSource.query('DELETE FROM "payment_transactions"');
+    await dataSource.query('DELETE FROM "orders"');
+    await dataSource
+      .getRepository(Connector)
+      .update({ code: 'ST01-C01' }, { status: ConnectorStatus.AVAILABLE });
   });
 
   it('creates a pending order with a deterministic local checkout URL', async () => {
@@ -114,42 +126,127 @@ describe('PayOS payment API', () => {
       },
     });
 
-    const payment = await dataSource
-      .getRepository(PaymentTransaction)
-      .findOne({ where: { order: { id: response.body.orderId } }, relations: { order: true } });
+    const payment = await dataSource.getRepository(PaymentTransaction).findOne({
+      where: { order: { id: response.body.orderId } },
+      relations: { order: true },
+    });
     expect(payment).toMatchObject({
       status: PaymentTransactionStatus.PENDING,
       checkoutUrl: response.body.payment.checkoutUrl,
     });
     expect(payment?.order.status).toBe(OrderStatus.PENDING_PAYMENT);
+    expect(
+      (
+        await dataSource
+          .getRepository(Connector)
+          .findOneByOrFail({ code: 'ST01-C01' })
+      ).status,
+    ).toBe(ConnectorStatus.OCCUPIED);
+  });
+
+  it('serves a local checkout page that can complete a mock payment', async () => {
+    const created = await createOrder();
+    const order = await dataSource
+      .getRepository(Order)
+      .findOneByOrFail({ id: created.body.orderId });
+    const checkoutPath = new URL(created.body.payment.checkoutUrl).pathname;
+
+    await request(app.getHttpServer())
+      .get(checkoutPath)
+      .expect('Content-Type', /text\/html/)
+      .expect(new RegExp(`action="${checkoutPath}/complete"`))
+      .expect(new RegExp(`action="${checkoutPath}/cancel"`))
+      .expect(200);
+    await request(app.getHttpServer())
+      .post(`${checkoutPath}/complete`)
+      .expect(201);
+
+    expect(
+      (await dataSource.getRepository(Order).findOneByOrFail({ id: order.id }))
+        .status,
+    ).toBe(OrderStatus.PAID);
+    expect(
+      (
+        await dataSource
+          .getRepository(Connector)
+          .findOneByOrFail({ code: 'ST01-C01' })
+      ).status,
+    ).toBe(ConnectorStatus.OCCUPIED);
+    expect(
+      await dataSource
+        .getRepository(ChargingSession)
+        .countBy({ order: { id: order.id } }),
+    ).toBe(1);
+  });
+
+  it('releases a reserved connector when local checkout is cancelled', async () => {
+    const created = await createOrder();
+    const checkoutPath = new URL(created.body.payment.checkoutUrl).pathname;
+
+    await request(app.getHttpServer())
+      .post(`${checkoutPath}/cancel`)
+      .expect(201);
+
+    expect(
+      (
+        await dataSource
+          .getRepository(Connector)
+          .findOneByOrFail({ code: 'ST01-C01' })
+      ).status,
+    ).toBe(ConnectorStatus.AVAILABLE);
+    await createOrder();
   });
 
   it('marks a signed paid webhook once and creates one session and start command', async () => {
     const created = await createOrder();
-    const order = await dataSource.getRepository(Order).findOneByOrFail({ id: created.body.orderId });
+    const order = await dataSource
+      .getRepository(Order)
+      .findOneByOrFail({ id: created.body.orderId });
     const data: PayosWebhookData = {
       orderCode: Number(order.payosOrderCode),
       amount: order.amountVnd,
       paymentLinkId: `mock_${order.payosOrderCode}`,
       status: 'PAID',
     };
-    const body = { code: '00', success: true, data, signature: payosClient.signWebhook(data) };
+    const body = {
+      code: '00',
+      success: true,
+      data,
+      signature: payosClient.signWebhook(data),
+    };
 
-    await request(app.getHttpServer()).post('/payments/payos/webhook').send(body).expect(201);
-    await request(app.getHttpServer()).post('/payments/payos/webhook').send(body).expect(201);
+    await request(app.getHttpServer())
+      .post('/payments/payos/webhook')
+      .send(body)
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/payments/payos/webhook')
+      .send(body)
+      .expect(201);
 
-    expect(await dataSource.getRepository(ChargingSession).countBy({ order: { id: order.id } })).toBe(1);
+    expect(
+      await dataSource
+        .getRepository(ChargingSession)
+        .countBy({ order: { id: order.id } }),
+    ).toBe(1);
     expect(await dataSource.getRepository(DeviceCommand).count()).toBe(1);
-    expect((await dataSource.getRepository(Order).findOneByOrFail({ id: order.id })).status).toBe(
-      OrderStatus.PAID,
-    );
+    expect(
+      (await dataSource.getRepository(Order).findOneByOrFail({ id: order.id }))
+        .status,
+    ).toBe(OrderStatus.PAID);
   });
 
   it('rejects invalid signatures, unknown orders, and amount mismatches without starting charging', async () => {
-    const beforeSessions = await dataSource.getRepository(ChargingSession).count();
-    const beforeCommands = await dataSource.getRepository(DeviceCommand).count();
+    const beforeSessions = await dataSource
+      .getRepository(ChargingSession)
+      .count();
+    const beforeCommands = await dataSource
+      .getRepository(DeviceCommand)
+      .count();
     const created = await createOrder();
-    const order = await dataSource.getRepository(Order).findOneByOrFail({ id: created.body.orderId });
+    const order = await dataSource
+      .getRepository(Order)
+      .findOneByOrFail({ id: created.body.orderId });
     const validData: PayosWebhookData = {
       orderCode: Number(order.payosOrderCode),
       amount: order.amountVnd,
@@ -158,7 +255,12 @@ describe('PayOS payment API', () => {
 
     await request(app.getHttpServer())
       .post('/payments/payos/webhook')
-      .send({ code: '00', success: true, data: validData, signature: 'not-valid' })
+      .send({
+        code: '00',
+        success: true,
+        data: validData,
+        signature: 'not-valid',
+      })
       .expect(400);
     await request(app.getHttpServer())
       .post('/payments/payos/webhook')
@@ -175,20 +277,70 @@ describe('PayOS payment API', () => {
         code: '00',
         success: true,
         data: { ...validData, amount: validData.amount + 1 },
-        signature: payosClient.signWebhook({ ...validData, amount: validData.amount + 1 }),
+        signature: payosClient.signWebhook({
+          ...validData,
+          amount: validData.amount + 1,
+        }),
       })
       .expect(400);
 
-    expect(await dataSource.getRepository(ChargingSession).count()).toBe(beforeSessions);
-    expect(await dataSource.getRepository(DeviceCommand).count()).toBe(beforeCommands);
-    expect((await dataSource.getRepository(Order).findOneByOrFail({ id: order.id })).status).toBe(
-      OrderStatus.PENDING_PAYMENT,
+    expect(await dataSource.getRepository(ChargingSession).count()).toBe(
+      beforeSessions,
     );
+    expect(await dataSource.getRepository(DeviceCommand).count()).toBe(
+      beforeCommands,
+    );
+    expect(
+      (await dataSource.getRepository(Order).findOneByOrFail({ id: order.id }))
+        .status,
+    ).toBe(OrderStatus.PENDING_PAYMENT);
+  });
+
+  it('returns 400 for malformed webhook data and signatures', async () => {
+    const created = await createOrder();
+    const order = await dataSource
+      .getRepository(Order)
+      .findOneByOrFail({ id: created.body.orderId });
+    const validData: PayosWebhookData = {
+      orderCode: Number(order.payosOrderCode),
+      amount: order.amountVnd,
+      status: 'PAID',
+    };
+
+    await request(app.getHttpServer())
+      .post('/payments/payos/webhook')
+      .send({ code: '00', success: true, data: null, signature: 'not-valid' })
+      .expect(400);
+    await request(app.getHttpServer())
+      .post('/payments/payos/webhook')
+      .send({
+        code: '00',
+        success: true,
+        data: { ...validData, amount: '10000' },
+        signature: payosClient.signWebhook({ ...validData, amount: '10000' }),
+      })
+      .expect(400);
+    await request(app.getHttpServer())
+      .post('/payments/payos/webhook')
+      .send({
+        code: '00',
+        success: true,
+        data: validData,
+        signature: { invalid: true },
+      })
+      .expect(400);
+
+    expect(
+      (await dataSource.getRepository(Order).findOneByOrFail({ id: order.id }))
+        .status,
+    ).toBe(OrderStatus.PENDING_PAYMENT);
   });
 
   it('persists a cancelled payment without creating charging work', async () => {
     const created = await createOrder();
-    const order = await dataSource.getRepository(Order).findOneByOrFail({ id: created.body.orderId });
+    const order = await dataSource
+      .getRepository(Order)
+      .findOneByOrFail({ id: created.body.orderId });
     const data: PayosWebhookData = {
       orderCode: Number(order.payosOrderCode),
       amount: order.amountVnd,
@@ -198,12 +350,18 @@ describe('PayOS payment API', () => {
 
     await request(app.getHttpServer())
       .post('/payments/payos/webhook')
-      .send({ code: '01', success: false, data, signature: payosClient.signWebhook(data) })
+      .send({
+        code: '01',
+        success: false,
+        data,
+        signature: payosClient.signWebhook(data),
+      })
       .expect(201);
 
-    expect((await dataSource.getRepository(Order).findOneByOrFail({ id: order.id })).status).toBe(
-      OrderStatus.PAYMENT_FAILED,
-    );
+    expect(
+      (await dataSource.getRepository(Order).findOneByOrFail({ id: order.id }))
+        .status,
+    ).toBe(OrderStatus.PAYMENT_FAILED);
     expect(
       (
         await dataSource
@@ -211,12 +369,18 @@ describe('PayOS payment API', () => {
           .findOneByOrFail({ order: { id: order.id } })
       ).status,
     ).toBe(PaymentTransactionStatus.FAILED);
-    expect(await dataSource.getRepository(ChargingSession).countBy({ order: { id: order.id } })).toBe(0);
+    expect(
+      await dataSource
+        .getRepository(ChargingSession)
+        .countBy({ order: { id: order.id } }),
+    ).toBe(0);
   });
 
   it('redirects signed return and cancel callbacks without changing payment state', async () => {
     const created = await createOrder();
-    const order = await dataSource.getRepository(Order).findOneByOrFail({ id: created.body.orderId });
+    const order = await dataSource
+      .getRepository(Order)
+      .findOneByOrFail({ id: created.body.orderId });
     const callbackData = { orderCode: Number(order.payosOrderCode) };
     const signature = payosClient.signWebhook(callbackData);
 
@@ -239,10 +403,15 @@ describe('PayOS payment API', () => {
       .query(callbackData)
       .expect(400);
 
-    expect((await dataSource.getRepository(Order).findOneByOrFail({ id: order.id })).status).toBe(
-      OrderStatus.PENDING_PAYMENT,
-    );
-    expect(await dataSource.getRepository(ChargingSession).countBy({ order: { id: order.id } })).toBe(0);
+    expect(
+      (await dataSource.getRepository(Order).findOneByOrFail({ id: order.id }))
+        .status,
+    ).toBe(OrderStatus.PENDING_PAYMENT);
+    expect(
+      await dataSource
+        .getRepository(ChargingSession)
+        .countBy({ order: { id: order.id } }),
+    ).toBe(0);
   });
 
   async function createOrder() {

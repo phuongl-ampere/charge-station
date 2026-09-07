@@ -1,6 +1,19 @@
 import axios from 'axios';
+import type {
+  CreatePaymentLinkInput,
+  PaymentLink,
+  PayosWebhook,
+  PayosWebhookData,
+} from '@charge-station/contracts';
 
 import { buildPayosSignature, verifyPayosSignature } from './payos-signature.js';
+
+export type {
+  CreatePaymentLinkInput,
+  PaymentLink,
+  PayosWebhook,
+  PayosWebhookData,
+} from '@charge-station/contracts';
 
 export type PayosMode = 'live' | 'mock';
 
@@ -12,30 +25,6 @@ export interface PayosClientConfig {
   returnUrl: string;
   cancelUrl: string;
   mockCheckoutBaseUrl?: string;
-}
-
-export interface CreatePaymentLinkInput {
-  amount: number;
-  orderCode: number;
-  description: string;
-  returnUrl: string;
-  cancelUrl: string;
-}
-
-export interface PayosWebhookData {
-  orderCode: number | string;
-  amount: number;
-  paymentLinkId?: string;
-  status?: string;
-  [key: string]: unknown;
-}
-
-export interface PayosWebhook {
-  code: string;
-  success: boolean;
-  data: PayosWebhookData;
-  signature: string;
-  desc?: string;
 }
 
 interface PayosPaymentLinkResponse {
@@ -59,9 +48,11 @@ export class PayosClient {
     return this.config.cancelUrl;
   }
 
-  async createPaymentLink(
-    input: CreatePaymentLinkInput,
-  ): Promise<{ checkoutUrl: string; paymentLinkId: string }> {
+  get isMock(): boolean {
+    return this.config.mode === 'mock';
+  }
+
+  async createPaymentLink(input: CreatePaymentLinkInput): Promise<PaymentLink> {
     const amount = Math.round(input.amount);
     this.validatePaymentLinkInput({ ...input, amount });
 
