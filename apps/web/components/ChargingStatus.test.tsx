@@ -200,7 +200,16 @@ describe("ChargingStatus", () => {
     );
 
     await act(async () => {
-      listeners.get("device.updated")?.("COMPLETED");
+      listeners.get("device.updated")?.({
+        estimatedRemainingSeconds: 0,
+        operationalWarning: "DEVICE_OFFLINE",
+        type: "HEARTBEAT",
+      });
+    });
+    expect(screen.getByText("0m 0s")).toBeVisible();
+    expect(screen.getByText("DEVICE_OFFLINE")).toBeVisible();
+    await act(async () => {
+      listeners.get("session.updated")?.("COMPLETED");
     });
     expect(
       await screen.findByRole("heading", { name: "Charge complete" }),

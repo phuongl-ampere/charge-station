@@ -17,7 +17,7 @@ export function PayosCheckout({
   onViewStatus,
 }: PayosCheckoutProps) {
   function openCheckout(): void {
-    window.open(checkoutUrl, "_blank", "noopener,noreferrer");
+    window.location.assign(checkoutUrl);
   }
 
   return (

@@ -77,14 +77,13 @@ test("selects a duration, opens local PayOS checkout, and shows payment waiting"
     path: testInfo.outputPath("checkout.png"),
     fullPage: true,
   });
-  const checkout = page.waitForEvent("popup");
-  await page.getByRole("button", { name: "Open PayOS checkout" }).click();
-  const checkoutPage = await checkout;
-  await expect(checkoutPage).toHaveURL(
+  const checkout = page.waitForURL(
     /localhost:4000\/payments\/payos\/mock\/123/,
   );
+  await page.getByRole("button", { name: "Open PayOS checkout" }).click();
+  await checkout;
 
-  await page.getByRole("button", { name: "View charging status" }).click();
+  await page.goto("/charge/ord_1");
   await expect(
     page.getByRole("heading", { name: "Waiting for payment" }),
   ).toBeVisible();

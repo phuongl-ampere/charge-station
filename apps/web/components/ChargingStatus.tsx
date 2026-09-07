@@ -121,6 +121,17 @@ function readSessionId(payload: unknown): string | null {
   return null;
 }
 
+function isDeviceSnapshot(
+  value: unknown,
+): value is Partial<
+  Pick<
+    SessionStatus,
+    "estimatedRemainingSeconds" | "lastDeviceEventAt" | "operationalWarning"
+  >
+> {
+  return typeof value === "object" && value !== null;
+}
+
 export function ChargingStatus({
   orderId,
   accessToken,
@@ -215,12 +226,31 @@ export function ChargingStatus({
         );
       }
     };
+    const deviceUpdated = (payload?: unknown) => {
+      if (!isDeviceSnapshot(payload)) return;
+      setSession((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          ...(typeof payload.estimatedRemainingSeconds === "number"
+            ? { estimatedRemainingSeconds: payload.estimatedRemainingSeconds }
+            : {}),
+          ...(typeof payload.lastDeviceEventAt === "string"
+            ? { lastDeviceEventAt: payload.lastDeviceEventAt }
+            : {}),
+          ...(typeof payload.operationalWarning === "string" ||
+          payload.operationalWarning === null
+            ? { operationalWarning: payload.operationalWarning }
+            : {}),
+        };
+      });
+    };
 
     socket.on("connect", subscribeOrder);
     socket.on("disconnect", disconnect);
     socket.on("payment.updated", paymentUpdated);
     socket.on("session.updated", sessionUpdated);
-    socket.on("device.updated", sessionUpdated);
+    socket.on("device.updated", deviceUpdated);
     if (socket.connected) subscribeOrder();
 
     return () => {
@@ -228,7 +258,7 @@ export function ChargingStatus({
       socket.off("disconnect", disconnect);
       socket.off("payment.updated", paymentUpdated);
       socket.off("session.updated", sessionUpdated);
-      socket.off("device.updated", sessionUpdated);
+      socket.off("device.updated", deviceUpdated);
     };
   }, [accessToken, orderId, socket]);
 
