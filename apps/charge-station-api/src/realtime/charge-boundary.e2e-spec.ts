@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 
-import { ValidationPipe } from "@nestjs/common";
+import { UnauthorizedException, ValidationPipe } from "@nestjs/common";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { getDataSourceToken } from "@nestjs/typeorm";
@@ -83,6 +83,13 @@ describe("charge capability boundary", () => {
       station,
       pricingPlan,
     });
+    await dataSource.getRepository(Connector).save({
+      id: randomUUID(),
+      code: "ST01-C02",
+      status: ConnectorStatus.AVAILABLE,
+      station,
+      pricingPlan,
+    });
 
     payosClient = new PayosClient({
       mode: "mock",
@@ -108,7 +115,7 @@ describe("charge capability boundary", () => {
           provide: AuthService,
           useValue: {
             verifyToken: vi.fn(() => {
-              throw new Error("The charge capability must authorize access");
+              throw new UnauthorizedException("Invalid token");
             }),
           },
         },
@@ -141,6 +148,11 @@ describe("charge capability boundary", () => {
       .expect(201);
     const accessToken = created.body.realtimeAccessToken as string;
     expect(accessToken).toEqual(expect.any(String));
+    const otherCreated = await request(app.getHttpServer())
+      .post("/orders")
+      .send({ connectorCode: "ST01-C02", durationMinutes: 60 })
+      .expect(201);
+    const otherAccessToken = otherCreated.body.realtimeAccessToken as string;
 
     const order = await dataSource.getRepository(Order).findOneByOrFail({
       id: created.body.orderId,
@@ -161,8 +173,23 @@ describe("charge capability boundary", () => {
       })
       .expect(201);
 
+    const missingTokenStatus = await request(app.getHttpServer())
+      .get(`/orders/${order.id}`)
+      .expect(401);
+    expect(missingTokenStatus.body).not.toHaveProperty("sessionId");
+    const invalidTokenStatus = await request(app.getHttpServer())
+      .get(`/orders/${order.id}`)
+      .set("authorization", "Bearer not-a-capability")
+      .expect(401);
+    expect(invalidTokenStatus.body).not.toHaveProperty("sessionId");
+    const otherOrderTokenStatus = await request(app.getHttpServer())
+      .get(`/orders/${order.id}`)
+      .set("authorization", `Bearer ${otherAccessToken}`)
+      .expect(403);
+    expect(otherOrderTokenStatus.body).not.toHaveProperty("sessionId");
     const orderStatus = await request(app.getHttpServer())
       .get(`/orders/${order.id}`)
+      .set("authorization", `Bearer ${accessToken}`)
       .expect(200);
     const sessionId = orderStatus.body.sessionId as string;
     expect(sessionId).toEqual(expect.any(String));

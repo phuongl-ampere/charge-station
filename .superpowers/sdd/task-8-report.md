@@ -162,3 +162,46 @@ compact three-column time selector and inline QR/action layout.
   - Passed: desktop and Pixel 5 projects, 2 tests.
 - `git diff --check`
   - Passed.
+
+## Final Authorization Fix Evidence
+
+The final Task 8 review finding was that `GET /orders/:id` still exposed the
+order projection, including `sessionId`, without the short-lived order
+capability. The endpoint now parses the Bearer header and calls the existing
+`ChargeGateway.authorizeOrder` verifier before `OrdersService.getOrder`.
+Missing or invalid capabilities return `401`; a valid capability for another
+order returns `403`; rejected responses contain no `sessionId`.
+
+`ChargeApi.getOrder` now requires the hydrated order capability and sends it as
+the `Authorization: Bearer` header. `ChargingStatus` skips initial order
+retrieval and polling until that token is available. The frontend regression
+asserts no `getOrder` call before hydration and a token-bearing request after
+hydration.
+
+Focused red/green evidence:
+
+- The API boundary initially received `200` for the unauthenticated order
+  request, then passed the missing-token, invalid-token, other-order-token,
+  and authorized-order assertions after the fix.
+- The web regression initially observed `getOrder("ord_1")` before hydration,
+  then passed with zero pre-hydration calls and
+  `getOrder("ord_1", "hydrated-order-token")` after hydration.
+
+Final verification:
+
+- `pnpm --filter @charge-station/api test`
+  - Passed: 14 files, 56 tests.
+- `pnpm --filter @charge-station/api test:e2e`
+  - Passed: 5 files, 14 tests.
+- `pnpm --filter @charge-station/api lint`
+  - Passed.
+- `pnpm --filter @charge-station/api build`
+  - Passed.
+- `pnpm --filter @charge-station/web test`
+  - Passed: 2 files, 5 tests.
+- `pnpm --filter @charge-station/web lint`
+  - Passed.
+- `pnpm --filter @charge-station/web build`
+  - Passed in an isolated run.
+- `pnpm --filter @charge-station/web playwright test`
+  - Passed: desktop and Pixel 5 projects, 2 tests.

@@ -126,7 +126,7 @@ export class ChargeGateway {
     return session.order.id;
   }
 
-  private async authorizeOrder(orderId: string, token: string): Promise<void> {
+  async authorizeOrder(orderId: string, token: string): Promise<void> {
     const realtimeToken = verifyRealtimeToken(token);
     if (realtimeToken) {
       if (realtimeToken.orderId !== orderId) {

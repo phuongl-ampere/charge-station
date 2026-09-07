@@ -41,14 +41,63 @@ describe("ChargingStatus", () => {
     };
 
     render(
-      <ChargingStatus orderId="ord_1" socket={disconnectedSocket} api={api} />,
+      <ChargingStatus
+        orderId="ord_1"
+        accessToken="hydrated-order-token"
+        socket={disconnectedSocket}
+        api={api}
+      />,
     );
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5000);
     });
 
-    expect(api.getOrder).toHaveBeenCalledWith("ord_1");
+    expect(api.getOrder).toHaveBeenCalledWith("ord_1", "hydrated-order-token");
+  });
+
+  it("does not request order status before its token hydrates", async () => {
+    vi.mocked(createChargeSocket).mockReturnValue({
+      connected: false,
+      disconnect: vi.fn(),
+      emit: vi.fn(),
+      off: vi.fn(),
+      on: vi.fn(),
+    });
+    const api = {
+      getOrder: vi.fn().mockResolvedValue({
+        amountVnd: 10000,
+        connectorCode: "ST01-C01",
+        currency: "VND",
+        durationMinutes: 120,
+        id: "ord_1",
+        payment: { provider: "PAYOS", status: "PAID" },
+        sessionId: "ses_1",
+        status: "PAID",
+      }),
+      getSession: vi.fn(),
+      stopSession: vi.fn(),
+    };
+
+    const view = render(<ChargingStatus orderId="ord_1" api={api} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(api.getOrder).not.toHaveBeenCalled();
+
+    view.rerender(
+      <ChargingStatus
+        orderId="ord_1"
+        accessToken="hydrated-order-token"
+        api={api}
+      />,
+    );
+    await waitFor(() =>
+      expect(api.getOrder).toHaveBeenCalledWith(
+        "ord_1",
+        "hydrated-order-token",
+      ),
+    );
   });
 
   it("waits for a hydrated token before joining a paid order and its session", async () => {
@@ -88,7 +137,10 @@ describe("ChargingStatus", () => {
 
     const view = render(<ChargingStatus orderId="ord_1" api={api} />);
 
-    await waitFor(() => expect(api.getOrder).toHaveBeenCalledWith("ord_1"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(api.getOrder).not.toHaveBeenCalled();
     expect(api.getSession).not.toHaveBeenCalled();
     expect(createChargeSocket).not.toHaveBeenCalled();
 
@@ -100,6 +152,12 @@ describe("ChargingStatus", () => {
       />,
     );
 
+    await waitFor(() =>
+      expect(api.getOrder).toHaveBeenCalledWith(
+        "ord_1",
+        "hydrated-order-token",
+      ),
+    );
     await waitFor(() => expect(createChargeSocket).toHaveBeenCalledTimes(1));
     await waitFor(() =>
       expect(api.getSession).toHaveBeenCalledWith(

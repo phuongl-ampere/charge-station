@@ -139,8 +139,9 @@ export function ChargingStatus({
   const phase = phaseFor(order, session);
 
   async function refreshOrder(): Promise<void> {
+    if (!accessToken) return;
     try {
-      const nextOrder = await api.getOrder(orderId);
+      const nextOrder = await api.getOrder(orderId, accessToken);
       setOrder(nextOrder);
       if (nextOrder.sessionId) {
         setSessionId(nextOrder.sessionId);
@@ -170,8 +171,9 @@ export function ChargingStatus({
   }
 
   useEffect(() => {
+    if (!accessToken) return;
     void refreshOrder();
-  }, [orderId]);
+  }, [accessToken, orderId]);
 
   useEffect(() => {
     if (sessionId) void refreshSession(sessionId);
@@ -229,13 +231,13 @@ export function ChargingStatus({
   }, [accessToken, orderId, socket]);
 
   useEffect(() => {
-    if (connected) return;
+    if (!accessToken || connected) return;
     const timer = window.setInterval(() => {
       void refreshOrder();
       if (sessionId) void refreshSession(sessionId);
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [connected, sessionId]);
+  }, [accessToken, connected, sessionId]);
 
   useEffect(() => {
     if (socket && sessionId && connected && accessToken) {
