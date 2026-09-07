@@ -363,6 +363,57 @@ describe("ChargingStatus", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("removes retry access when its session capability is unavailable", async () => {
+    const api = {
+      getOrder: vi.fn().mockResolvedValue({
+        amountVnd: 5000,
+        connectorCode: "ST01-C01",
+        currency: "VND",
+        durationMinutes: 60,
+        id: "ord_1",
+        payment: { provider: "PAYOS", status: "PAID" },
+        sessionId: "ses_1",
+        status: "PAID",
+      }),
+      getSession: vi.fn().mockResolvedValue({
+        estimatedRemainingSeconds: null,
+        id: "ses_1",
+        lastDeviceEventAt: null,
+        operationalWarning: null,
+        orderId: "ord_1",
+        status: "START_FAILED",
+        timerAuthority: "DEVICE",
+      }),
+      retryStart: vi.fn(),
+      stopSession: vi.fn(),
+    };
+    const socket = {
+      connected: false,
+      disconnect: vi.fn(),
+      emit: vi.fn(),
+      off: vi.fn(),
+      on: vi.fn(),
+    };
+    const view = render(
+      <ChargingStatus
+        orderId="ord_1"
+        accessToken="retry-capability"
+        api={api}
+        socket={socket}
+      />,
+    );
+
+    await screen.findByRole("button", { name: "Retry charging start" });
+
+    view.rerender(
+      <ChargingStatus orderId="ord_1" api={api} socket={socket} />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Retry charging start" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("prevents duplicate retry clicks while a retry is pending", async () => {
     const user = userEvent.setup();
     let resolveRetry: (() => void) | undefined;
