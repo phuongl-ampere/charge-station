@@ -22,7 +22,11 @@ import {
   DeviceCommandStatus,
 } from "../database/data-source.js";
 import { ChargeGateway } from "../realtime/charge.gateway.js";
-import { IotServiceClient, IotTransportError } from "./iot-service.client.js";
+import {
+  IotCommandRejectedError,
+  IotServiceClient,
+  IotTransportError,
+} from "./iot-service.client.js";
 
 const RETRY_DELAYS_MS = [1_000, 5_000, 20_000] as const;
 
@@ -82,25 +86,33 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
         await commandRepository.save(command);
         return;
       } catch (error: unknown) {
-        if (!(error instanceof IotTransportError)) {
-          await this.markFailed(command, commandRepository);
-          throw error;
+        if (error instanceof IotTransportError) {
+          if (
+            !Number.isInteger(command.retryCount) ||
+            command.retryCount < 0 ||
+            command.retryCount >= RETRY_DELAYS_MS.length
+          ) {
+            await this.markRetryExhausted(command, commandRepository);
+            throw error;
+          }
+
+          const delayMs = RETRY_DELAYS_MS[command.retryCount];
+          command.retryCount += 1;
+          command.nextAttemptAt = new Date(Date.now() + delayMs);
+          await commandRepository.save(command);
+          await this.wait(delayMs);
+          continue;
         }
 
         if (
-          !Number.isInteger(command.retryCount) ||
-          command.retryCount < 0 ||
-          command.retryCount >= RETRY_DELAYS_MS.length
+          error instanceof IotCommandRejectedError &&
+          command.commandType === "START_CHARGING"
         ) {
-          await this.markRetryExhausted(command, commandRepository);
-          throw error;
+          await this.markDefinitiveStartFailure(command, commandRepository);
+        } else {
+          await this.markFailed(command, commandRepository);
         }
-
-        const delayMs = RETRY_DELAYS_MS[command.retryCount];
-        command.retryCount += 1;
-        command.nextAttemptAt = new Date(Date.now() + delayMs);
-        await commandRepository.save(command);
-        await this.wait(delayMs);
+        throw error;
       }
     }
   }
@@ -166,6 +178,58 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
       }
 
       const sessionRepository = manager.getRepository(ChargingSession);
+      const session = await sessionRepository.findOneBy({ id: sessionId });
+      if (!session) {
+        await this.markFailed(command, transactionalCommandRepository);
+        return null;
+      }
+
+      command.status = DeviceCommandStatus.FAILED;
+      command.nextAttemptAt = null;
+      const shouldMarkStateUnknown =
+        session.status === ChargingSessionStatus.PENDING ||
+        session.status === ChargingSessionStatus.STARTING;
+      if (shouldMarkStateUnknown) {
+        session.status = ChargingSessionStatus.DEVICE_OFFLINE;
+        session.operationalWarning = "START_STATE_UNKNOWN";
+      }
+
+      await transactionalCommandRepository.save(command);
+      if (shouldMarkStateUnknown) {
+        await sessionRepository.save(session);
+      }
+
+      return shouldMarkStateUnknown
+        ? { sessionId: session.id, status: session.status }
+        : null;
+    });
+
+    if (result) {
+      this.gateway?.publishSession(
+        result.sessionId,
+        "session.updated",
+        result.status,
+      );
+    }
+  }
+
+  private async markDefinitiveStartFailure(
+    command: DeviceCommand,
+    commandRepository: Repository<DeviceCommand>,
+  ): Promise<void> {
+    const result = await this.dataSource.transaction(async (manager) => {
+      const transactionalCommandRepository =
+        manager.getRepository(DeviceCommand);
+      const sessionId = await lockChargingSessionId(
+        manager,
+        command.session.id,
+      );
+      if (!sessionId) {
+        await this.markFailed(command, transactionalCommandRepository);
+        return null;
+      }
+
+      const sessionRepository = manager.getRepository(ChargingSession);
       const connectorRepository = manager.getRepository(Connector);
       const session = await sessionRepository.findOneBy({ id: sessionId });
       if (!session) {
@@ -173,25 +237,32 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
         return null;
       }
 
+      command.status = DeviceCommandStatus.FAILED;
+      command.nextAttemptAt = null;
+      await transactionalCommandRepository.save(command);
+
+      if (
+        session.status !== ChargingSessionStatus.PENDING &&
+        session.status !== ChargingSessionStatus.STARTING
+      ) {
+        return null;
+      }
+
       const connectorId = await lockConnectorId(manager, session.connector.id);
       const connector = connectorId
         ? await connectorRepository.findOne({ where: { id: connectorId } })
         : null;
-      if (!connector) {
-        await this.markFailed(command, transactionalCommandRepository);
-        return null;
+      session.status = ChargingSessionStatus.START_FAILED;
+      session.operationalWarning = null;
+      if (connector) {
+        connector.status = ConnectorStatus.AVAILABLE;
+        session.connector = connector;
       }
 
-      command.status = DeviceCommandStatus.FAILED;
-      command.nextAttemptAt = null;
-      session.status = ChargingSessionStatus.START_FAILED;
-      connector.status = ConnectorStatus.AVAILABLE;
-      session.connector = connector;
-
-      await transactionalCommandRepository.save(command);
       await sessionRepository.save(session);
-      await connectorRepository.save(connector);
-
+      if (connector) {
+        await connectorRepository.save(connector);
+      }
       return { sessionId: session.id, status: session.status };
     });
 

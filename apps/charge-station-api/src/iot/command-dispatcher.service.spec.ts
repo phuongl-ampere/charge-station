@@ -190,7 +190,7 @@ describe("CommandDispatcherService", () => {
     ]);
   });
 
-  it("marks an exhausted start retry failed, releases the connector, and publishes the terminal session state", async () => {
+  it("marks exhausted start transport retries as state-unknown without releasing the connector", async () => {
     const command = createCommand();
     const commandRepository = {
       findOne: vi.fn().mockResolvedValue(command),
@@ -200,24 +200,16 @@ describe("CommandDispatcherService", () => {
       findOneBy: vi.fn().mockResolvedValue(command.session),
       save: vi.fn().mockImplementation(async (entity) => entity),
     };
-    const connectorRepository = {
-      findOne: vi.fn().mockResolvedValue(command.session.connector),
-      save: vi.fn().mockImplementation(async (entity) => entity),
-    };
     const manager = {
       query: vi.fn().mockImplementation(async (query: string) => {
         if (query.includes("FROM charging_sessions")) {
           return [{ id: command.session.id }];
-        }
-        if (query.includes("FROM connectors")) {
-          return [{ id: command.session.connector.id }];
         }
         throw new Error("Unexpected lock query");
       }),
       getRepository: vi.fn((entity) => {
         if (entity === DeviceCommand) return commandRepository;
         if (entity === ChargingSession) return sessionRepository;
-        if (entity === Connector) return connectorRepository;
         throw new Error("Unexpected repository");
       }),
     };
@@ -258,16 +250,18 @@ describe("CommandDispatcherService", () => {
     expect(wait).toHaveBeenNthCalledWith(2, 5_000);
     expect(wait).toHaveBeenNthCalledWith(3, 20_000);
     expect(command.status).toBe(DeviceCommandStatus.FAILED);
-    expect(command.session.status).toBe(ChargingSessionStatus.START_FAILED);
-    expect(command.session.connector.status).toBe("AVAILABLE");
+    expect(command.session.status).toBe(ChargingSessionStatus.DEVICE_OFFLINE);
+    expect(command.session.operationalWarning).toBe("START_STATE_UNKNOWN");
+    expect(command.session.connector.status).toBe("OCCUPIED");
     expect(sessionRepository.save).toHaveBeenCalledWith(command.session);
-    expect(connectorRepository.save).toHaveBeenCalledWith(
-      command.session.connector,
+    expect(manager.query).not.toHaveBeenCalledWith(
+      expect.stringContaining("FROM connectors"),
+      expect.anything(),
     );
     expect(gateway.publishSession).toHaveBeenCalledWith(
       command.session.id,
       "session.updated",
-      ChargingSessionStatus.START_FAILED,
+      ChargingSessionStatus.DEVICE_OFFLINE,
     );
   });
 
@@ -394,14 +388,40 @@ describe("CommandDispatcherService", () => {
     expect(command.nextAttemptAt).toBeNull();
   });
 
-  it("marks rejected command responses failed without retrying", async () => {
+  it("treats a rejected start command as definitive and releases the connector", async () => {
     const command = createCommand();
     const commandRepository = {
       findOne: vi.fn().mockResolvedValue(command),
       save: vi.fn().mockImplementation(async (entity) => entity),
     };
+    const sessionRepository = {
+      findOneBy: vi.fn().mockResolvedValue(command.session),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const connectorRepository = {
+      findOne: vi.fn().mockResolvedValue(command.session.connector),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const manager = {
+      query: vi.fn().mockImplementation(async (query: string) => {
+        if (query.includes("FROM charging_sessions")) {
+          return [{ id: command.session.id }];
+        }
+        if (query.includes("FROM connectors")) {
+          return [{ id: command.session.connector.id }];
+        }
+        throw new Error("Unexpected lock query");
+      }),
+      getRepository: vi.fn((entity) => {
+        if (entity === DeviceCommand) return commandRepository;
+        if (entity === ChargingSession) return sessionRepository;
+        if (entity === Connector) return connectorRepository;
+        throw new Error("Unexpected repository");
+      }),
+    };
     const dataSource = {
       getRepository: vi.fn().mockReturnValue(commandRepository),
+      transaction: vi.fn(async (callback) => callback(manager)),
     };
     const iotClient = {
       start: vi
@@ -425,6 +445,12 @@ describe("CommandDispatcherService", () => {
     expect(command.retryCount).toBe(0);
     expect(command.status).toBe(DeviceCommandStatus.FAILED);
     expect(command.nextAttemptAt).toBeNull();
+    expect(command.session.status).toBe(ChargingSessionStatus.START_FAILED);
+    expect(command.session.connector.status).toBe("AVAILABLE");
+    expect(sessionRepository.save).toHaveBeenCalledWith(command.session);
+    expect(connectorRepository.save).toHaveBeenCalledWith(
+      command.session.connector,
+    );
   });
 });
 
@@ -432,6 +458,7 @@ function createCommand(overrides: Partial<DeviceCommand> = {}): DeviceCommand {
   const connector = {
     id: randomUUID(),
     code: "ST01-C01",
+    status: "OCCUPIED",
     station: { code: "ST01" },
   } as Connector;
   const session = {

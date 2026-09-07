@@ -8,7 +8,7 @@ import {
 } from "@nestjs/common";
 import { InjectDataSource } from "@nestjs/typeorm";
 import { randomUUID } from "node:crypto";
-import { DataSource, EntityManager } from "typeorm";
+import { DataSource, EntityManager, In } from "typeorm";
 
 import {
   ChargingSession,
@@ -74,22 +74,34 @@ export class ChargingService {
         throw new NotFoundException("Charging session not found");
       }
 
+      if (session.status === ChargingSessionStatus.PENDING) {
+        throw new BadRequestException(
+          "Charging session cannot be stopped before start dispatch",
+        );
+      }
       const existingCommand = await commandRepository.findOne({
         where: {
           session: { id: session.id },
           commandType: "STOP_CHARGING",
+          status: In([
+            DeviceCommandStatus.PENDING,
+            DeviceCommandStatus.SENT,
+            DeviceCommandStatus.ACCEPTED,
+          ]),
         },
       });
       if (existingCommand) {
         return existingCommand.commandId;
       }
       if (
-        session.status === ChargingSessionStatus.CHARGING ||
-        session.status === ChargingSessionStatus.STARTING
+        session.status !== ChargingSessionStatus.STARTING &&
+        session.status !== ChargingSessionStatus.CHARGING &&
+        session.status !== ChargingSessionStatus.DEVICE_OFFLINE
       ) {
-        session.status = ChargingSessionStatus.STOPPING;
-        await sessionRepository.save(session);
+        throw new BadRequestException("Charging session cannot be stopped");
       }
+      session.status = ChargingSessionStatus.STOPPING;
+      await sessionRepository.save(session);
 
       const command = commandRepository.create({
         id: randomUUID(),
@@ -141,13 +153,14 @@ export class ChargingService {
         where: {
           session: { id: session.id },
           commandType: "START_CHARGING",
+          status: DeviceCommandStatus.FAILED,
         },
+        order: { createdAt: "DESC" },
       });
       if (!command) {
         throw new NotFoundException("Start command not found");
       }
       if (
-        command.status !== DeviceCommandStatus.FAILED ||
         !hasUnexpiredStartPayload(command.payload, session.expectedEndAt)
       ) {
         throw new BadRequestException(
@@ -163,18 +176,25 @@ export class ChargingService {
         throw new BadRequestException("Connector is not available");
       }
 
-      command.retryCount = 0;
-      command.nextAttemptAt = null;
-      command.status = DeviceCommandStatus.PENDING;
-      command.acknowledgedAt = null;
+      const recoveryCommand = commandRepository.create({
+        id: randomUUID(),
+        commandId: randomUUID(),
+        session,
+        commandType: "START_CHARGING",
+        payload: { ...command.payload },
+        retryCount: 0,
+        nextAttemptAt: null,
+        status: DeviceCommandStatus.PENDING,
+        acknowledgedAt: null,
+      });
       session.status = ChargingSessionStatus.PENDING;
       connector.status = ConnectorStatus.OCCUPIED;
       session.connector = connector;
 
-      await commandRepository.save(command);
+      const savedCommand = await commandRepository.save(recoveryCommand);
       await sessionRepository.save(session);
       await connectorRepository.save(connector);
-      return command.commandId;
+      return savedCommand.commandId;
     });
 
     this.dispatchRetryStartCommand(commandId);

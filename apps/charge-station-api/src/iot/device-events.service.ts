@@ -153,10 +153,12 @@ export class DeviceEventsService {
             case "RUNNING":
               if (
                 session.status === ChargingSessionStatus.PENDING ||
-                session.status === ChargingSessionStatus.STARTING
+                session.status === ChargingSessionStatus.STARTING ||
+                session.status === ChargingSessionStatus.DEVICE_OFFLINE
               ) {
                 session.status = ChargingSessionStatus.CHARGING;
                 session.startedAt = occurredAt;
+                session.operationalWarning = null;
                 saveSession = true;
               }
               break;
@@ -188,7 +190,8 @@ export class DeviceEventsService {
             case "COMMAND_FAILED":
               if (
                 session.status === ChargingSessionStatus.PENDING ||
-                session.status === ChargingSessionStatus.STARTING
+                session.status === ChargingSessionStatus.STARTING ||
+                session.status === ChargingSessionStatus.DEVICE_OFFLINE
               ) {
                 session.status = ChargingSessionStatus.START_FAILED;
                 saveSession = true;

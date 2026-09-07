@@ -5,13 +5,13 @@ export class AddDeviceCommandSessionTypeUnique implements MigrationInterface {
 
   async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
-      "ALTER TABLE device_commands ADD CONSTRAINT uq_device_commands_session_command_type UNIQUE (session_id, command_type)",
+      "CREATE UNIQUE INDEX uq_device_commands_active_session_command_type ON device_commands (session_id, command_type) WHERE status IN ('PENDING', 'SENT', 'ACCEPTED')",
     );
   }
 
   async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
-      "ALTER TABLE device_commands DROP CONSTRAINT uq_device_commands_session_command_type",
+      "DROP INDEX uq_device_commands_active_session_command_type",
     );
   }
 }

@@ -17,13 +17,23 @@ import {
   PricingPlan,
   Station,
 } from "../database/data-source.js";
-import type { CommandDispatcherService } from "../iot/command-dispatcher.service.js";
+import { CommandDispatcherService } from "../iot/command-dispatcher.service.js";
+import {
+  IotServiceClient,
+  IotTransportError,
+} from "../iot/iot-service.client.js";
+import type { PayosClient } from "../payments/payos.client.js";
+import { PaymentsService } from "../payments/payments.service.js";
 import { ChargingService } from "./charging.service.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ??
   "postgres://charge:charge@localhost:5432/charge_station";
 const schema = `reliability_${randomUUID().replaceAll("-", "")}`;
+
+class ImmediateCommandDispatcherService extends CommandDispatcherService {
+  protected override async wait(): Promise<void> {}
+}
 
 describe("Charging reliability with local PostgreSQL", () => {
   let adminDataSource: DataSource;
@@ -71,7 +81,7 @@ describe("Charging reliability with local PostgreSQL", () => {
     }
   });
 
-  it("reuses a persisted failed start command after a transport outage", async () => {
+  it("creates a fresh start command while preserving a failed start command audit record", async () => {
     const fixture = await createFixture(
       ChargingSessionStatus.START_FAILED,
       ConnectorStatus.AVAILABLE,
@@ -89,6 +99,7 @@ describe("Charging reliability with local PostgreSQL", () => {
 
     const commands = await dataSource.getRepository(DeviceCommand).find({
       where: { session: { id: fixture.session.id } },
+      order: { createdAt: "ASC" },
     });
     const session = await dataSource
       .getRepository(ChargingSession)
@@ -97,27 +108,100 @@ describe("Charging reliability with local PostgreSQL", () => {
       .getRepository(Connector)
       .findOneByOrFail({ id: fixture.connector.id });
 
-    expect(commands).toHaveLength(1);
+    expect(commands).toHaveLength(2);
     expect(commands[0]).toMatchObject({
       id: fixture.command.id,
       commandId: fixture.command.commandId,
+      payload: fixture.command.payload,
+      status: DeviceCommandStatus.FAILED,
+      retryCount: 3,
+      nextAttemptAt: null,
+      acknowledgedAt: null,
+    });
+    expect(commands[1]).toMatchObject({
+      commandType: "START_CHARGING",
       payload: fixture.command.payload,
       status: DeviceCommandStatus.PENDING,
       retryCount: 0,
       nextAttemptAt: null,
       acknowledgedAt: null,
     });
+    expect(commands[1].id).not.toBe(fixture.command.id);
+    expect(commands[1].commandId).not.toBe(fixture.command.commandId);
     expect(session.status).toBe(ChargingSessionStatus.PENDING);
     expect(connector.status).toBe(ConnectorStatus.OCCUPIED);
-    expect(dispatcher.dispatch).toHaveBeenCalledWith(fixture.command.commandId);
+    expect(dispatcher.dispatch).toHaveBeenCalledWith(commands[1].commandId);
   });
 
-  it("serializes concurrent stops and enforces one command of each type per session", async () => {
+  it("retains connector allocation after an ambiguous start transport outage", async () => {
+    const fixture = await createFixture(
+      ChargingSessionStatus.PENDING,
+      ConnectorStatus.OCCUPIED,
+      DeviceCommandStatus.PENDING,
+    );
+    const dispatcher = new ImmediateCommandDispatcherService(
+      dataSource,
+      {
+        start: vi
+          .fn()
+          .mockRejectedValue(new IotTransportError("connection refused")),
+        stop: vi.fn(),
+      } as unknown as IotServiceClient,
+    );
+
+    await expect(dispatcher.dispatch(fixture.command.commandId)).rejects.toThrow(
+      "connection refused",
+    );
+
+    const session = await dataSource
+      .getRepository(ChargingSession)
+      .findOneByOrFail({ id: fixture.session.id });
+    const connector = await dataSource
+      .getRepository(Connector)
+      .findOneByOrFail({ id: fixture.connector.id });
+    expect(session).toMatchObject({
+      status: ChargingSessionStatus.DEVICE_OFFLINE,
+      operationalWarning: "START_STATE_UNKNOWN",
+    });
+    expect(connector.status).toBe(ConnectorStatus.OCCUPIED);
+
+    const paymentsService = new PaymentsService(
+      dataSource,
+      {} as PayosClient,
+    );
+    await expect(
+      paymentsService.createOrder({
+        connectorCode: fixture.connector.code,
+        durationMinutes: 60,
+      }),
+    ).rejects.toThrow("Connector is not available");
+    expect(
+      await dataSource
+        .getRepository(Order)
+        .countBy({ connector: { id: fixture.connector.id } }),
+    ).toBe(1);
+  });
+
+  it("serializes concurrent stops while preserving terminal stop command history", async () => {
     const fixture = await createFixture(
       ChargingSessionStatus.CHARGING,
       ConnectorStatus.OCCUPIED,
       DeviceCommandStatus.SENT,
     );
+    await dataSource.getRepository(DeviceCommand).save({
+      id: randomUUID(),
+      commandId: randomUUID(),
+      session: fixture.session,
+      commandType: "STOP_CHARGING",
+      payload: {
+        sessionId: fixture.session.id,
+        reason: "USER_REQUESTED",
+      },
+      retryCount: 0,
+      nextAttemptAt: null,
+      status: DeviceCommandStatus.FAILED,
+      acknowledgedAt: null,
+    });
     const dispatcher = { dispatch: vi.fn().mockResolvedValue(undefined) };
     const service = new ChargingService(
       dataSource,
@@ -139,16 +223,28 @@ describe("Charging reliability with local PostgreSQL", () => {
       .getRepository(ChargingSession)
       .findOneByOrFail({ id: fixture.session.id });
 
-    expect(commands).toHaveLength(2);
+    expect(commands).toHaveLength(3);
     expect(
       commands.filter((command) => command.commandType === "START_CHARGING"),
     ).toHaveLength(1);
     expect(
       commands.filter((command) => command.commandType === "STOP_CHARGING"),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
+    const activeStop = commands.find(
+      (command) =>
+        command.commandType === "STOP_CHARGING" &&
+        command.status === DeviceCommandStatus.PENDING,
+    );
+    expect(activeStop).toBeDefined();
     expect(session.status).toBe(ChargingSessionStatus.STOPPING);
-    expect(dispatcher.dispatch).toHaveBeenCalledWith(
-      expect.stringMatching(/.+/),
+    expect(dispatcher.dispatch).toHaveBeenCalledTimes(2);
+    expect(dispatcher.dispatch).toHaveBeenNthCalledWith(
+      1,
+      activeStop?.commandId,
+    );
+    expect(dispatcher.dispatch).toHaveBeenNthCalledWith(
+      2,
+      activeStop?.commandId,
     );
 
     await expect(

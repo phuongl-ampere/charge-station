@@ -135,7 +135,7 @@ describe("ChargingController", () => {
     expect(chargingService.retryStart).toHaveBeenCalledWith("ses_1");
   });
 
-  it("reuses the original failed start command and payload during recovery", async () => {
+  it("creates a fresh start command while preserving the failed command audit record", async () => {
     const expiry = new Date(Date.now() + 60 * 60_000).toISOString();
     const originalPayload = {
       stationCode: "ST01",
@@ -175,7 +175,7 @@ describe("ChargingController", () => {
     };
     const commandRepository = {
       findOne: vi.fn().mockResolvedValue(command),
-      create: vi.fn(),
+      create: vi.fn().mockImplementation((entity) => entity),
       save: vi.fn().mockImplementation(async (entity) => entity),
     };
     const connectorRepository = {
@@ -219,18 +219,33 @@ describe("ChargingController", () => {
       expect.stringContaining("FROM connectors"),
       [session.connector.id],
     );
-    expect(commandRepository.create).not.toHaveBeenCalled();
+    expect(commandRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: expect.any(String),
+        commandId: expect.any(String),
+        commandType: "START_CHARGING",
+        payload: originalPayload,
+        retryCount: 0,
+        nextAttemptAt: null,
+        status: DeviceCommandStatus.PENDING,
+        acknowledgedAt: null,
+      }),
+    );
+    const recoveryCommand = commandRepository.create.mock.results[0]?.value;
+    expect(recoveryCommand.id).not.toBe(command.id);
+    expect(recoveryCommand.commandId).not.toBe(command.commandId);
     expect(command.commandId).toBe("cmd_start_1");
     expect(command.payload).toEqual(originalPayload);
     expect(command).toMatchObject({
-      retryCount: 0,
-      nextAttemptAt: null,
-      status: DeviceCommandStatus.PENDING,
-      acknowledgedAt: null,
+      retryCount: 3,
+      nextAttemptAt: new Date("2026-09-08T10:00:00.000Z"),
+      status: DeviceCommandStatus.FAILED,
+      acknowledgedAt: new Date("2026-09-08T10:00:00.000Z"),
     });
+    expect(commandRepository.save).toHaveBeenCalledWith(recoveryCommand);
     expect(session.status).toBe(ChargingSessionStatus.PENDING);
     expect(session.connector.status).toBe("OCCUPIED");
-    expect(dispatcher.dispatch).toHaveBeenCalledWith("cmd_start_1");
+    expect(dispatcher.dispatch).toHaveBeenCalledWith(recoveryCommand.commandId);
   });
 
   it.each([
@@ -380,6 +395,63 @@ describe("ChargingController", () => {
     expect(session.status).toBe(ChargingSessionStatus.STOPPING);
   });
 
+  it("rejects stopping a pending start before creating a device stop command", async () => {
+    const { commandRepository, service } = createStopHarness(
+      vi.fn().mockResolvedValue(undefined),
+      ChargingSessionStatus.PENDING,
+    );
+    commandRepository.findOne.mockResolvedValue({
+      commandId: "legacy-stop-command",
+      status: DeviceCommandStatus.PENDING,
+    } as DeviceCommand);
+
+    await expect(service.stopSession("ses_1")).rejects.toThrow(
+      "Charging session cannot be stopped before start dispatch",
+    );
+
+    expect(commandRepository.create).not.toHaveBeenCalled();
+    expect(commandRepository.save).not.toHaveBeenCalled();
+  });
+
+  it("moves a state-unknown session to STOPPING when stop is requested", async () => {
+    const { session, service } = createStopHarness(
+      vi.fn().mockResolvedValue(undefined),
+      ChargingSessionStatus.DEVICE_OFFLINE,
+    );
+
+    await expect(service.stopSession("ses_1")).resolves.toEqual({
+      accepted: true,
+    });
+
+    expect(session.status).toBe(ChargingSessionStatus.STOPPING);
+  });
+
+  it("does not reuse a terminal stop command as an active stop request", async () => {
+    const { commandRepository, service } = createStopHarness(
+      vi.fn().mockResolvedValue(undefined),
+    );
+    const terminalStop = {
+      commandId: "terminal-stop-command",
+      status: DeviceCommandStatus.FAILED,
+    } as DeviceCommand;
+    commandRepository.findOne.mockImplementation(async ({ where }) => {
+      return "status" in where ? null : terminalStop;
+    });
+
+    await expect(service.stopSession("ses_1")).resolves.toEqual({
+      accepted: true,
+    });
+
+    expect(commandRepository.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: expect.anything(),
+        }),
+      }),
+    );
+    expect(commandRepository.create).toHaveBeenCalledTimes(1);
+  });
+
   it("returns accepted before a slow dispatcher completes", async () => {
     const { commandRepository, service } = createStopHarness(
       () => new Promise<void>(() => undefined),
@@ -417,10 +489,13 @@ describe("ChargingController", () => {
   });
 });
 
-function createStopHarness(dispatch: (commandId: string) => Promise<void>) {
+function createStopHarness(
+  dispatch: (commandId: string) => Promise<void>,
+  status = ChargingSessionStatus.CHARGING,
+) {
   const session = {
     id: "ses_1",
-    status: ChargingSessionStatus.CHARGING,
+    status,
   } as ChargingSession;
   const commandRepository = {
     findOne: vi.fn().mockResolvedValue(null),
@@ -446,6 +521,7 @@ function createStopHarness(dispatch: (commandId: string) => Promise<void>) {
 
   return {
     commandRepository,
+    session,
     service: new ChargingService(
       dataSource as unknown as DataSource,
       { dispatch } as unknown as CommandDispatcherService,

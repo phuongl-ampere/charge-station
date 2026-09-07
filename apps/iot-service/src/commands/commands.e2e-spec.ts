@@ -147,4 +147,56 @@ describe("internal command API", () => {
       eventClient.post.mock.calls.filter(([event]) => event.type === "STOPPED"),
     ).toHaveLength(1);
   });
+
+  it.each([
+    {
+      mode: "timeout",
+      expectedTypes: ["COMMAND_ACCEPTED", "COMMAND_FAILED", "STOPPED"],
+    },
+    {
+      mode: "command_failed",
+      expectedTypes: ["COMMAND_ACCEPTED", "COMMAND_FAILED", "STOPPED"],
+    },
+    {
+      mode: "offline",
+      expectedTypes: [
+        "COMMAND_ACCEPTED",
+        "DEVICE_OFFLINE",
+        "COMMAND_FAILED",
+        "STOPPED",
+      ],
+    },
+  ])(
+    "delivers a terminal relay-off failure sequence for $mode",
+    async ({ mode, expectedTypes }) => {
+      const previousMode = process.env.MOCK_IOT_FAILURE_MODE;
+      process.env.MOCK_IOT_FAILURE_MODE = mode;
+
+      try {
+        await request(app.getHttpServer())
+          .post("/internal/commands/start")
+          .set("X-Service-Token", "test-service-token")
+          .send(startCommand(`command-failure-${mode}`))
+          .expect(201);
+
+        await vi.advanceTimersByTimeAsync(100);
+
+        expect(eventClient.post.mock.calls.map(([event]) => event.type)).toEqual(
+          expectedTypes,
+        );
+        expect(eventClient.post).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            type: "STOPPED",
+            payload: expect.objectContaining({ relayState: "OFF" }),
+          }),
+        );
+      } finally {
+        if (previousMode === undefined) {
+          delete process.env.MOCK_IOT_FAILURE_MODE;
+        } else {
+          process.env.MOCK_IOT_FAILURE_MODE = previousMode;
+        }
+      }
+    },
+  );
 });

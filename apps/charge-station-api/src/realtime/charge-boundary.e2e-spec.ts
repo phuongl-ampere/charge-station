@@ -15,6 +15,8 @@ import { AuthService } from "../auth/auth.service.js";
 import { ChargingController } from "../charging/charging.controller.js";
 import { ChargingService } from "../charging/charging.service.js";
 import {
+  ChargingSession,
+  ChargingSessionStatus,
   Connector,
   ConnectorStatus,
   DeviceCommand,
@@ -205,6 +207,9 @@ describe("charge capability boundary", () => {
       id: sessionId,
       orderId: order.id,
     });
+    await dataSource
+      .getRepository(ChargingSession)
+      .update(sessionId, { status: ChargingSessionStatus.STARTING });
 
     await request(app.getHttpServer())
       .post(`/sessions/${sessionId}/stop`)

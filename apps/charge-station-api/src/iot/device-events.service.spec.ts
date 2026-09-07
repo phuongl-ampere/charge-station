@@ -11,6 +11,7 @@ import {
   Connector,
   ConnectorStatus,
   DeviceCommand,
+  DeviceCommandStatus,
   DeviceEvent,
 } from "../database/data-source.js";
 import { DeviceEventsService } from "./device-events.service.js";
@@ -32,6 +33,28 @@ describe("DeviceEventsService", () => {
     expect(harness.session.status).toBe(ChargingSessionStatus.CHARGING);
     expect(harness.session.startedAt).toEqual(
       new Date("2026-09-08T11:00:00.000Z"),
+    );
+  });
+
+  it("reconciles a late RUNNING after an ambiguous transport outage", async () => {
+    const harness = createHarness(ChargingSessionStatus.DEVICE_OFFLINE);
+    harness.session.operationalWarning = "START_STATE_UNKNOWN";
+    const service = new DeviceEventsService(
+      harness.dataSource as unknown as DataSource,
+    );
+
+    await service.handle(
+      createEvent(harness.command.commandId, harness.session.id, {
+        type: "RUNNING",
+        occurredAt: "2026-09-08T11:01:00.000Z",
+        payload: { relayState: "ON", remainingSeconds: 3600 },
+      }),
+    );
+
+    expect(harness.session.status).toBe(ChargingSessionStatus.CHARGING);
+    expect(harness.session.operationalWarning).toBeNull();
+    expect(harness.session.startedAt).toEqual(
+      new Date("2026-09-08T11:01:00.000Z"),
     );
   });
 
@@ -197,6 +220,36 @@ describe("DeviceEventsService", () => {
       expect(harness.connector.status).toBe(ConnectorStatus.AVAILABLE);
     },
   );
+
+  it("treats COMMAND_FAILED after a state-unknown start as definitive until STOPPED releases the connector", async () => {
+    const harness = createHarness(ChargingSessionStatus.DEVICE_OFFLINE);
+    harness.session.operationalWarning = "START_STATE_UNKNOWN";
+    const service = new DeviceEventsService(
+      harness.dataSource as unknown as DataSource,
+    );
+
+    await service.handle(
+      createEvent(harness.command.commandId, harness.session.id, {
+        type: "COMMAND_FAILED",
+        occurredAt: "2026-09-08T11:01:00.000Z",
+        payload: { reason: "COMMAND_FAILED", relayState: "OFF" },
+      }),
+    );
+
+    expect(harness.command.status).toBe(DeviceCommandStatus.FAILED);
+    expect(harness.session.status).toBe(ChargingSessionStatus.START_FAILED);
+    expect(harness.connector.status).toBe(ConnectorStatus.OCCUPIED);
+
+    await service.handle(
+      createEvent(harness.command.commandId, harness.session.id, {
+        type: "STOPPED",
+        occurredAt: "2026-09-08T11:02:00.000Z",
+        payload: { reason: "COMMAND_FAILED", relayState: "OFF" },
+      }),
+    );
+
+    expect(harness.connector.status).toBe(ConnectorStatus.AVAILABLE);
+  });
 
   it("releases an occupied connector when STOPPED confirms relay-off after start failure", async () => {
     const harness = createHarness(ChargingSessionStatus.START_FAILED);

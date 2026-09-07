@@ -16,6 +16,7 @@ import { DataSource, type DataSourceOptions } from 'typeorm';
 import { InitialSchemaMigration } from './migrations/001-initial-schema.js';
 import { AddDeviceCommandRetryAndSessionState } from './migrations/002-device-command-retry-and-session-state.js';
 import { AddDeviceCommandSessionTypeUnique } from './migrations/003-device-command-session-type-unique.js';
+import { AddActiveDeviceCommandSessionTypeUnique } from './migrations/004-device-command-active-index.js';
 
 export enum UserRole {
   CUSTOMER = 'CUSTOMER',
@@ -275,8 +276,9 @@ export class ChargingSession {
 }
 
 @Entity('device_commands')
-@Index('uq_device_commands_session_command_type', ['session', 'commandType'], {
+@Index('uq_device_commands_active_session_command_type', ['session', 'commandType'], {
   unique: true,
+  where: `"status" IN ('PENDING', 'SENT', 'ACCEPTED')`,
 })
 export class DeviceCommand {
   @PrimaryColumn('uuid')
@@ -368,6 +370,7 @@ export const migrations = [
   InitialSchemaMigration,
   AddDeviceCommandRetryAndSessionState,
   AddDeviceCommandSessionTypeUnique,
+  AddActiveDeviceCommandSessionTypeUnique,
 ];
 
 export const databaseOptions: DataSourceOptions = {
