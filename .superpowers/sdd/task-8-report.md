@@ -79,3 +79,46 @@ The reviewed screenshots show the duration choices, QR/check-out controls,
 station total, and status rail without text or control overlap. Mobile uses a
 single-column duration selector and stacked checkout controls; desktop keeps a
 compact three-column time selector and inline QR/action layout.
+
+## Task 8 Review Remediation
+
+- `GET /orders/:id` now includes `sessionId` when the persisted order has a
+  charging session. This lets the status page discover and fetch the session
+  after payment.
+- `payment.updated` now publishes an object containing `orderId` and `status`;
+  the successful paid transition also contains `sessionId`.
+- `ChargingStatus` does not construct a local Socket.IO client until the
+  short-lived order token has hydrated. A token change replaces the local
+  client, subscribes it to the order and session after connect/reconnect, and
+  disconnects only the client instance that its effect created.
+- The delayed-token component regression covers paid-order session discovery,
+  session fetching, order/session subscriptions, `CHARGING` and `COMPLETED`
+  socket events, and a stop request that carries the hydrated token.
+
+## Review Verification
+
+- Focused red/green:
+  - API projection and payment payload tests failed before the implementation
+    because `sessionId` and structured event payloads were absent, then passed.
+  - The delayed-token web regression failed before the implementation because
+    `createChargeSocket()` ran without a token, then passed.
+- `pnpm --filter @charge-station/api test`
+  - Passed: 14 files, 55 tests.
+- `pnpm --filter @charge-station/api test:e2e`
+  - Passed: 4 files, 13 tests.
+- `pnpm --filter @charge-station/api lint`
+  - Passed.
+- `pnpm --filter @charge-station/api build`
+  - Passed.
+- `pnpm --filter @charge-station/web test`
+  - Passed: 2 files, 4 tests.
+- `pnpm --filter @charge-station/web lint`
+  - Passed.
+- `pnpm --filter @charge-station/web build`
+  - Passed.
+- `pnpm --filter @charge-station/web playwright test`
+  - Passed: desktop and Pixel 5 projects. All mocked API and checkout URLs are
+    `localhost`; no external network endpoint is used.
+- Inspected screenshots:
+  - `apps/web/test-results/checkout-selects-a-duratio-8845d-t-and-shows-payment-waiting-desktop/`
+  - `apps/web/test-results/checkout-selects-a-duratio-8845d-t-and-shows-payment-waiting-mobile/`

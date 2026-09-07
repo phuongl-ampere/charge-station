@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DataSource } from "typeorm";
 
 import {
+  ChargingSession,
   Order,
   OrderStatus,
   PaymentTransaction,
@@ -28,10 +29,14 @@ describe("OrdersService", () => {
         checkoutUrl: "http://localhost:4000/mock-checkout",
       }),
     };
+    const sessionRepository = {
+      findOne: async () => ({ id: "ses_1" }),
+    };
     const service = new OrdersService({
       getRepository: (entity: unknown) => {
         if (entity === Order) return orderRepository;
         if (entity === PaymentTransaction) return paymentRepository;
+        if (entity === ChargingSession) return sessionRepository;
         throw new Error("Unexpected repository");
       },
     } as unknown as DataSource);
@@ -43,6 +48,7 @@ describe("OrdersService", () => {
       currency: "VND",
       durationMinutes: 120,
       connectorCode: "ST01-C01",
+      sessionId: "ses_1",
       payment: {
         provider: "PAYOS",
         status: "PAID",

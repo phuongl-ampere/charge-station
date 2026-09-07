@@ -283,11 +283,11 @@ export class PaymentsService {
       };
     });
     if (result.orderId && result.orderStatus) {
-      this.gateway?.publishOrder(
-        result.orderId,
-        "payment.updated",
-        result.orderStatus,
-      );
+      this.gateway?.publishOrder(result.orderId, "payment.updated", {
+        orderId: result.orderId,
+        status: result.orderStatus,
+        ...(result.sessionId ? { sessionId: result.sessionId } : {}),
+      });
     }
     if (result.sessionId && result.sessionStatus) {
       this.gateway?.publishSession(

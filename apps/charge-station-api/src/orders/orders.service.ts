@@ -2,7 +2,11 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectDataSource } from "@nestjs/typeorm";
 import { DataSource } from "typeorm";
 
-import { Order, PaymentTransaction } from "../database/data-source.js";
+import {
+  ChargingSession,
+  Order,
+  PaymentTransaction,
+} from "../database/data-source.js";
 
 @Injectable()
 export class OrdersService {
@@ -18,6 +22,11 @@ export class OrdersService {
       .findOne({
         where: { order: { id: order.id } },
       });
+    const session = await this.dataSource
+      .getRepository(ChargingSession)
+      .findOne({
+        where: { order: { id: order.id } },
+      });
 
     return {
       id: order.id,
@@ -26,6 +35,7 @@ export class OrdersService {
       currency: order.currency,
       durationMinutes: order.durationMinutes,
       connectorCode: order.connector.code,
+      ...(session ? { sessionId: session.id } : {}),
       payment: payment
         ? {
             provider: payment.provider,

@@ -10,7 +10,7 @@ import {
   Radio,
   Square,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   chargeApi,
@@ -132,12 +132,10 @@ export function ChargingStatus({
   const [connected, setConnected] = useState(
     Boolean(suppliedSocket?.connected),
   );
+  const [localSocket, setLocalSocket] = useState<ChargeSocket | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
-  const socket = useMemo(
-    () => suppliedSocket ?? createChargeSocket(),
-    [suppliedSocket],
-  );
+  const socket = suppliedSocket ?? localSocket;
   const phase = phaseFor(order, session);
 
   async function refreshOrder(): Promise<void> {
@@ -179,6 +177,21 @@ export function ChargingStatus({
   }, [sessionId]);
 
   useEffect(() => {
+    if (suppliedSocket || !accessToken) return;
+
+    const client = createChargeSocket();
+    setLocalSocket(client);
+    setConnected(client.connected);
+
+    return () => {
+      setLocalSocket((current) => (current === client ? null : current));
+      client.disconnect?.();
+    };
+  }, [accessToken, suppliedSocket]);
+
+  useEffect(() => {
+    if (!socket) return;
+
     const subscribeOrder = () => {
       setConnected(true);
       if (accessToken) socket.emit("subscribe", { orderId, accessToken });
@@ -211,9 +224,8 @@ export function ChargingStatus({
       socket.off("payment.updated", paymentUpdated);
       socket.off("session.updated", sessionUpdated);
       socket.off("device.updated", sessionUpdated);
-      if (!suppliedSocket) socket.disconnect?.();
     };
-  }, [accessToken, orderId, socket, suppliedSocket]);
+  }, [accessToken, orderId, socket]);
 
   useEffect(() => {
     if (connected) return;
@@ -225,7 +237,7 @@ export function ChargingStatus({
   }, [connected, sessionId]);
 
   useEffect(() => {
-    if (sessionId && connected && accessToken) {
+    if (socket && sessionId && connected && accessToken) {
       socket.emit("subscribe", { sessionId, accessToken });
     }
   }, [accessToken, connected, sessionId, socket]);

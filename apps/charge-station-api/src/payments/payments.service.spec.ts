@@ -212,7 +212,11 @@ describe("PaymentsService webhook processing", () => {
     expect(gateway.publishOrder).toHaveBeenCalledWith(
       pendingOrder.id,
       "payment.updated",
-      OrderStatus.PAID,
+      {
+        orderId: pendingOrder.id,
+        status: OrderStatus.PAID,
+        sessionId: sessionRepository.create.mock.results[0]?.value.id,
+      },
     );
     expect(gateway.publishSession).toHaveBeenCalledWith(
       sessionRepository.create.mock.results[0]?.value.id,
@@ -340,7 +344,10 @@ describe("PaymentsService webhook processing", () => {
       expect(gateway.publishOrder).toHaveBeenCalledWith(
         order.id,
         "payment.updated",
-        orderStatus,
+        {
+          orderId: order.id,
+          status: orderStatus,
+        },
       );
     },
   );
