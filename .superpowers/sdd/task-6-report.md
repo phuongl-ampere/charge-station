@@ -188,3 +188,22 @@ host.
   - Passed.
 - `git diff --check`
   - Passed with no whitespace errors.
+
+## Freshness Fix Evidence
+
+- Root cause: `lastDeviceEventAt` already used a strict timestamp check, but
+  `HEARTBEAT` and `DEVICE_OFFLINE` still mutated the session's remaining
+  estimate and operational warning for stale deliveries.
+- Red: `pnpm --filter @charge-station/api test -- device-events.service.spec.ts`
+  failed with the two new reverse-delivery-order tests. Older heartbeats
+  overwrote the newer remaining estimate or cleared a newer offline warning,
+  and an older offline event set a warning after a newer heartbeat.
+- Green: the same focused command passed with 1 file and 12 tests.
+- Focused Task 6 verification:
+  `pnpm --filter @charge-station/api test -- device-events.service.spec.ts
+  command-dispatcher.service.spec.ts` passed with 2 files and 18 tests.
+- Build verification: `pnpm --filter @charge-station/api build` passed.
+- `data-source.ts` was checked against the pre-Task-6 baseline. Its diff
+  contains only the required `SENT` status, retry/session current-state
+  fields, and migration registration; no quote-only formatting churn was
+  retained.

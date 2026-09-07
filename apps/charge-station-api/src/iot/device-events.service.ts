@@ -109,10 +109,10 @@ export class DeviceEventsService {
       let saveSession = false;
       let saveCommand = false;
       let saveConnector = false;
-      if (
+      const isFreshDeviceEvent =
         !session.lastDeviceEventAt ||
-        occurredAt.valueOf() > session.lastDeviceEventAt.valueOf()
-      ) {
+        occurredAt.valueOf() > session.lastDeviceEventAt.valueOf();
+      if (isFreshDeviceEvent) {
         session.lastDeviceEventAt = occurredAt;
         saveSession = true;
       }
@@ -136,11 +136,13 @@ export class DeviceEventsService {
           }
           break;
         case "HEARTBEAT":
-          session.estimatedRemainingSeconds = readRemainingSeconds(
-            event.payload,
-          );
-          session.operationalWarning = null;
-          saveSession = true;
+          if (isFreshDeviceEvent) {
+            session.estimatedRemainingSeconds = readRemainingSeconds(
+              event.payload,
+            );
+            session.operationalWarning = null;
+            saveSession = true;
+          }
           break;
         case "STOPPED":
           if (isNonterminalSessionStatus(session.status)) {
@@ -170,8 +172,10 @@ export class DeviceEventsService {
           }
           break;
         case "DEVICE_OFFLINE":
-          session.operationalWarning = "DEVICE_OFFLINE";
-          saveSession = true;
+          if (isFreshDeviceEvent) {
+            session.operationalWarning = "DEVICE_OFFLINE";
+            saveSession = true;
+          }
           break;
       }
 

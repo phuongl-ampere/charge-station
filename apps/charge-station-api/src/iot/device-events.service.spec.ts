@@ -176,6 +176,73 @@ describe("DeviceEventsService", () => {
     });
     expect(harness.sessionRepository.save).toHaveBeenCalledTimes(2);
   });
+
+  it("ignores older heartbeat and offline events after a newer heartbeat", async () => {
+    const harness = createHarness(ChargingSessionStatus.CHARGING);
+    const service = new DeviceEventsService(
+      harness.dataSource as unknown as DataSource,
+    );
+
+    await service.handle(
+      createEvent(harness.command.commandId, harness.session.id, {
+        type: "HEARTBEAT",
+        occurredAt: "2026-09-08T11:01:00.000Z",
+        payload: { remainingSeconds: 1800 },
+      }),
+    );
+    await service.handle(
+      createEvent(harness.command.commandId, harness.session.id, {
+        type: "HEARTBEAT",
+        occurredAt: "2026-09-08T11:00:00.000Z",
+        payload: { remainingSeconds: 3600 },
+      }),
+    );
+    await service.handle(
+      createEvent(harness.command.commandId, harness.session.id, {
+        type: "DEVICE_OFFLINE",
+        occurredAt: "2026-09-08T10:59:00.000Z",
+        payload: { reason: "CONNECTION_LOST" },
+      }),
+    );
+
+    expect(harness.session).toMatchObject({
+      estimatedRemainingSeconds: 1800,
+      lastDeviceEventAt: new Date("2026-09-08T11:01:00.000Z"),
+      operationalWarning: null,
+    });
+    expect(harness.sessionRepository.save).toHaveBeenCalledTimes(1);
+    expect(harness.events).toHaveLength(3);
+  });
+
+  it("keeps an offline warning when an older heartbeat arrives afterward", async () => {
+    const harness = createHarness(ChargingSessionStatus.CHARGING);
+    const service = new DeviceEventsService(
+      harness.dataSource as unknown as DataSource,
+    );
+
+    await service.handle(
+      createEvent(harness.command.commandId, harness.session.id, {
+        type: "DEVICE_OFFLINE",
+        occurredAt: "2026-09-08T11:01:00.000Z",
+        payload: { reason: "CONNECTION_LOST" },
+      }),
+    );
+    await service.handle(
+      createEvent(harness.command.commandId, harness.session.id, {
+        type: "HEARTBEAT",
+        occurredAt: "2026-09-08T11:00:00.000Z",
+        payload: { remainingSeconds: 1800 },
+      }),
+    );
+
+    expect(harness.session.estimatedRemainingSeconds).toBeUndefined();
+    expect(harness.session.lastDeviceEventAt).toEqual(
+      new Date("2026-09-08T11:01:00.000Z"),
+    );
+    expect(harness.session.operationalWarning).toBe("DEVICE_OFFLINE");
+    expect(harness.sessionRepository.save).toHaveBeenCalledTimes(1);
+    expect(harness.events).toHaveLength(2);
+  });
 });
 
 function createHarness(status: ChargingSessionStatus) {
