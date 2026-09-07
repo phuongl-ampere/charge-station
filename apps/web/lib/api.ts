@@ -76,6 +76,28 @@ function localOrigin(value: string | undefined, fallback: string): string {
   return url.origin;
 }
 
+function validateCheckoutUrl(value: string, localOrigin: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Invalid checkout URL");
+  }
+
+  const isLocalCheckout = url.origin === localOrigin;
+  const isPayosCheckout =
+    url.protocol === "https:" &&
+    url.hostname === "pay.payos.vn" &&
+    url.port === "" &&
+    !url.username &&
+    !url.password;
+
+  if (!isLocalCheckout && !isPayosCheckout) {
+    throw new Error("Invalid checkout URL");
+  }
+  return url.toString();
+}
+
 export const localApiOrigin = localOrigin(
   process.env.NEXT_PUBLIC_API_URL,
   "http://localhost:4000",
@@ -122,10 +144,7 @@ export function createChargeApi(origin = localApiOrigin): ChargeApi {
         ...order,
         payment: {
           ...order.payment,
-          checkoutUrl: localUrl(
-            order.payment.checkoutUrl,
-            localApiOrigin,
-          ).toString(),
+          checkoutUrl: validateCheckoutUrl(order.payment.checkoutUrl, local),
         },
       };
     },
