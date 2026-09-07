@@ -201,7 +201,7 @@ describe("ChargingController", () => {
     const dataSource = {
       transaction: vi.fn(async (callback) => callback(manager)),
     };
-    const dispatcher = { dispatch: vi.fn().mockResolvedValue(undefined) };
+    const dispatcher = { dispatchWhenIotReady: vi.fn() };
     const service = new ChargingService(
       dataSource as unknown as DataSource,
       dispatcher as unknown as CommandDispatcherService,
@@ -245,7 +245,9 @@ describe("ChargingController", () => {
     expect(commandRepository.save).toHaveBeenCalledWith(recoveryCommand);
     expect(session.status).toBe(ChargingSessionStatus.PENDING);
     expect(session.connector.status).toBe("OCCUPIED");
-    expect(dispatcher.dispatch).toHaveBeenCalledWith(recoveryCommand.commandId);
+    expect(dispatcher.dispatchWhenIotReady).toHaveBeenCalledWith(
+      recoveryCommand.commandId,
+    );
   });
 
   it.each([

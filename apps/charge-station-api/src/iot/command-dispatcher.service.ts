@@ -43,9 +43,11 @@ export class CommandDispatcherService
   implements OnApplicationBootstrap, OnApplicationShutdown
 {
   private readonly logger = new Logger(CommandDispatcherService.name);
-  private readinessProbeStarted = false;
+  private readinessProbeInProgress = false;
+  private readinessRecoveryRequested = false;
   private readinessRecoveryDispatched = false;
   private readinessRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly commandsAwaitingIotReadiness = new Set<string>();
 
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
@@ -64,14 +66,32 @@ export class CommandDispatcherService
       clearTimeout(this.readinessRetryTimer);
       this.readinessRetryTimer = undefined;
     }
+    this.commandsAwaitingIotReadiness.clear();
   }
 
   dispatchPendingAfterReady(): void {
-    if (this.readinessProbeStarted || this.readinessRecoveryDispatched) {
+    if (
+      this.readinessRecoveryRequested ||
+      this.readinessRecoveryDispatched
+    ) {
       return;
     }
 
-    this.readinessProbeStarted = true;
+    this.readinessRecoveryRequested = true;
+    this.ensureIotReadinessProbe();
+  }
+
+  dispatchWhenIotReady(commandId: string): void {
+    this.commandsAwaitingIotReadiness.add(commandId);
+    this.ensureIotReadinessProbe();
+  }
+
+  private ensureIotReadinessProbe(): void {
+    if (this.readinessProbeInProgress || this.readinessRetryTimer) {
+      return;
+    }
+
+    this.readinessProbeInProgress = true;
     queueMicrotask(() => {
       void this.probeIotReadiness(0);
     });
@@ -335,12 +355,43 @@ export class CommandDispatcherService
     }
 
     this.readinessRetryTimer = undefined;
-    this.readinessRecoveryDispatched = true;
+    this.readinessProbeInProgress = false;
     try {
-      await this.dispatchPending();
+      const recoverPendingCommands = this.readinessRecoveryRequested;
+      this.readinessRecoveryRequested = false;
+      const commandIds = [...this.commandsAwaitingIotReadiness];
+      this.commandsAwaitingIotReadiness.clear();
+
+      if (recoverPendingCommands) {
+        this.readinessRecoveryDispatched = true;
+        await this.dispatchPending().catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          this.logger.error(
+            "Unable to recover pending IoT commands: " + message,
+          );
+        });
+      }
+      for (const commandId of commandIds) {
+        await this.dispatch(commandId).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          this.logger.warn(
+            "Unable to dispatch ready IoT command " +
+              commandId +
+              ": " +
+              message,
+          );
+        });
+      }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Unable to dispatch pending IoT commands: ${message}`);
+      this.logger.error(`Unable to dispatch ready IoT commands: ${message}`);
+    } finally {
+      if (
+        this.readinessRecoveryRequested ||
+        this.commandsAwaitingIotReadiness.size > 0
+      ) {
+        this.ensureIotReadinessProbe();
+      }
     }
   }
 

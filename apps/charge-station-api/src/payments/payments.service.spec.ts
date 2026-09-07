@@ -15,7 +15,6 @@ import {
   PaymentTransactionStatus,
 } from "../database/data-source.js";
 import type { CommandDispatcherService } from "../iot/command-dispatcher.service.js";
-import { IotTransportError } from "../iot/iot-service.client.js";
 import type { ChargeGateway } from "../realtime/charge.gateway.js";
 import type { PayosClient } from "./payos.client.js";
 import type { PayosWebhook } from "./payos.client.js";
@@ -265,6 +264,108 @@ describe("PaymentsService webhook processing", () => {
     expect(dataSource.transaction).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps an ambiguous PayOS reservation pending with an order capability", async () => {
+    const connector = {
+      id: randomUUID(),
+      code: "ST01-C01",
+      status: "AVAILABLE",
+      pricingPlan: {
+        hourlyPriceVnd: 5000,
+        allowedDurationsMinutes: [60],
+      },
+    } as Connector;
+    let savedOrder: Order | undefined;
+    let savedPayment: PaymentTransaction | undefined;
+    const connectorRepository = {
+      findOne: vi.fn().mockResolvedValue(connector),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const orderRepository = {
+      create: vi.fn().mockImplementation((entity) => ({
+        ...entity,
+        payosOrderCode: "100001",
+      })),
+      save: vi.fn().mockImplementation(async (entity) => {
+        savedOrder = entity;
+        return entity;
+      }),
+    };
+    const paymentRepository = {
+      create: vi.fn().mockImplementation((entity) => entity),
+      findOne: vi.fn().mockImplementation(async () => savedPayment),
+      save: vi.fn().mockImplementation(async (entity) => {
+        savedPayment = entity;
+        return entity;
+      }),
+    };
+    const manager = {
+      query: vi.fn().mockImplementation(async (query: string) => {
+        if (query.includes("FROM connectors")) {
+          return [{ id: connector.id }];
+        }
+        if (query.includes("FROM payment_transactions")) {
+          return [{ id: savedPayment?.id }];
+        }
+        throw new Error("Unexpected lock query");
+      }),
+      getRepository: vi.fn((entity) => {
+        if (entity === Connector) return connectorRepository;
+        if (entity === Order) return orderRepository;
+        if (entity === PaymentTransaction) return paymentRepository;
+        throw new Error("Unexpected repository");
+      }),
+    };
+    const dataSource = {
+      transaction: vi.fn(async (callback) => callback(manager)),
+    };
+    const payosClient = {
+      returnUrl: "http://localhost:5173/charge/return",
+      cancelUrl: "http://localhost:5173/charge/cancel",
+      createPaymentLink: vi
+        .fn()
+        .mockRejectedValue(new Error("PayOS request timed out")),
+      getPaymentLinkInfo: vi
+        .fn()
+        .mockRejectedValue(new Error("PayOS lookup is unavailable")),
+    };
+    const gateway = {
+      issueAccessToken: vi.fn().mockReturnValue("signed-realtime-token"),
+    };
+    const service = new PaymentsService(
+      dataSource as unknown as DataSource,
+      payosClient as unknown as PayosClient,
+      undefined,
+      gateway as unknown as ChargeGateway,
+    );
+    const logger = vi
+      .spyOn(Logger.prototype, "warn")
+      .mockImplementation(() => undefined);
+
+    try {
+      await expect(
+        service.createOrder({
+          connectorCode: connector.code,
+          durationMinutes: 60,
+        }),
+      ).resolves.toMatchObject({
+        payment: { provider: "PAYOS", paymentPending: true },
+        realtimeAccessToken: "signed-realtime-token",
+      });
+    } finally {
+      logger.mockRestore();
+    }
+
+    expect(savedOrder).toMatchObject({ status: OrderStatus.PENDING_PAYMENT });
+    expect(savedPayment).toMatchObject({
+      status: PaymentTransactionStatus.PENDING,
+      checkoutUrl: null,
+      paymentLinkId: null,
+    });
+    expect(connector.status).toBe("OCCUPIED");
+    expect(payosClient.getPaymentLinkInfo).toHaveBeenCalledWith(100001);
+    expect(gateway.issueAccessToken).toHaveBeenCalledWith(savedOrder?.id);
+  });
+
   it("reconciles a created PayOS link after its first persistence transaction fails", async () => {
     const connector = {
       id: randomUUID(),
@@ -385,7 +486,7 @@ describe("PaymentsService webhook processing", () => {
     });
   });
 
-  it("returns success after payment while a provider transport retry dispatch rejects asynchronously", async () => {
+  it("queues the paid start command only after the payment transaction commits", async () => {
     const pendingOrder = {
       id: randomUUID(),
       payosOrderCode: "100001",
@@ -450,13 +551,9 @@ describe("PaymentsService webhook processing", () => {
     const client = {
       verifyWebhook: vi.fn().mockReturnValue(true),
     };
-    let rejectDispatch: (error: Error) => void = () => undefined;
     const commandDispatcher = {
-      dispatch: vi.fn(() => {
+      dispatchWhenIotReady: vi.fn(() => {
         expect(transactionCommitted).toBe(true);
-        return new Promise<void>((_resolve, reject) => {
-          rejectDispatch = reject;
-        });
       }),
     };
     const gateway = {
@@ -485,27 +582,7 @@ describe("PaymentsService webhook processing", () => {
       },
     };
 
-    const logger = vi
-      .spyOn(Logger.prototype, "error")
-      .mockImplementation(() => undefined);
-    const webhook = service.handleWebhook(body);
-    const response = await Promise.race([
-      webhook,
-      new Promise<"timed out">((resolve) => {
-        setTimeout(() => resolve("timed out"), 25);
-      }),
-    ]);
-    rejectDispatch(new IotTransportError("IoT transport unavailable"));
-    await expect(webhook).resolves.toEqual({ success: true });
-    await vi.waitFor(() => {
-      expect(logger).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to dispatch start command"),
-        expect.any(String),
-      );
-    });
-    logger.mockRestore();
-
-    expect(response).toEqual({ success: true });
+    await expect(service.handleWebhook(body)).resolves.toEqual({ success: true });
     await service.handleWebhook(body);
 
     expect(manager.query).toHaveBeenCalledWith(
@@ -526,7 +603,7 @@ describe("PaymentsService webhook processing", () => {
     expect(commandRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({ commandType: "START_CHARGING" }),
     );
-    expect(commandDispatcher.dispatch).toHaveBeenCalledWith(
+    expect(commandDispatcher.dispatchWhenIotReady).toHaveBeenCalledWith(
       commandRepository.create.mock.results[0]?.value.commandId,
     );
     expect(gateway.publishOrder).toHaveBeenCalledWith(

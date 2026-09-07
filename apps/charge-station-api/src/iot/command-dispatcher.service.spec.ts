@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { Logger } from "@nestjs/common";
 import { describe, expect, it, vi } from "vitest";
 import type { DataSource } from "typeorm";
 
@@ -279,6 +280,91 @@ describe("CommandDispatcherService", () => {
 
     await expect(service.onApplicationBootstrap()).resolves.toBeUndefined();
     expect(commandRepository.find).not.toHaveBeenCalled();
+  });
+
+  it("keeps a directly queued start command pending until IoT health recovers", async () => {
+    const command = createCommand();
+    const commandRepository = {
+      findOne: vi.fn().mockResolvedValue(command),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const dataSource = {
+      getRepository: vi.fn().mockReturnValue(commandRepository),
+    };
+    const iotClient = {
+      isHealthy: vi
+        .fn()
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true),
+      start: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new CommandDispatcherService(
+      dataSource as unknown as DataSource,
+      iotClient as unknown as IotServiceClient,
+    );
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-08T11:00:00.000Z"));
+    try {
+      service.dispatchWhenIotReady(command.commandId);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(iotClient.isHealthy).toHaveBeenCalledTimes(1);
+      expect(iotClient.start).not.toHaveBeenCalled();
+      expect(command).toMatchObject({
+        status: DeviceCommandStatus.PENDING,
+        retryCount: 0,
+        nextAttemptAt: null,
+      });
+      expect(commandRepository.save).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(iotClient.isHealthy).toHaveBeenCalledTimes(2);
+      expect(iotClient.start).toHaveBeenCalledTimes(1);
+      expect(command).toMatchObject({
+        status: DeviceCommandStatus.SENT,
+        retryCount: 0,
+        nextAttemptAt: null,
+      });
+    } finally {
+      service.onApplicationShutdown();
+      vi.useRealTimers();
+    }
+  });
+
+  it("continues draining ready commands after one queued dispatch fails", async () => {
+    const dataSource = {
+      getRepository: vi.fn(),
+    };
+    const iotClient = {
+      isHealthy: vi.fn().mockResolvedValue(true),
+    };
+    const service = new CommandDispatcherService(
+      dataSource as unknown as DataSource,
+      iotClient as unknown as IotServiceClient,
+    );
+    const dispatch = vi
+      .spyOn(service, "dispatch")
+      .mockRejectedValueOnce(new Error("first command is invalid"))
+      .mockResolvedValueOnce(undefined);
+    const logger = vi
+      .spyOn(Logger.prototype, "warn")
+      .mockImplementation(() => undefined);
+
+    try {
+      service.dispatchWhenIotReady("command_1");
+      service.dispatchWhenIotReady("command_2");
+      await vi.waitFor(() => {
+        expect(dispatch).toHaveBeenCalledTimes(2);
+      });
+    } finally {
+      logger.mockRestore();
+    }
+
+    expect(dispatch).toHaveBeenNthCalledWith(1, "command_1");
+    expect(dispatch).toHaveBeenNthCalledWith(2, "command_2");
   });
 
   it("retries the post-listen IoT readiness probe before dispatching pending commands", async () => {

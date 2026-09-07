@@ -26,7 +26,10 @@ import {
 import type { PaymentLink } from "@charge-station/contracts";
 import { CommandDispatcherService } from "../iot/command-dispatcher.service.js";
 import { ChargeGateway } from "../realtime/charge.gateway.js";
-import { PayosClient } from "./payos.client.js";
+import {
+  PayosClient,
+  PayosPaymentLinkDefinitiveError,
+} from "./payos.client.js";
 import type { CreateOrderDto } from "./dto/create-order.dto.js";
 import { parsePayosWebhook } from "./payos-webhook.js";
 
@@ -37,6 +40,18 @@ interface PaymentLinkReservation {
   amount: number;
   currency: string;
   description: string;
+}
+
+type PaymentLinkResponse =
+  | { provider: "PAYOS"; checkoutUrl: string }
+  | { provider: "PAYOS"; paymentPending: true };
+
+interface CreateOrderResult {
+  orderId: string;
+  amount: number;
+  currency: string;
+  payment: PaymentLinkResponse;
+  realtimeAccessToken?: string;
 }
 
 @Injectable()
@@ -54,13 +69,7 @@ export class PaymentsService {
     private readonly gateway?: ChargeGateway,
   ) {}
 
-  async createOrder(input: CreateOrderDto): Promise<{
-    orderId: string;
-    amount: number;
-    currency: string;
-    payment: { provider: "PAYOS"; checkoutUrl: string };
-    realtimeAccessToken?: string;
-  }> {
+  async createOrder(input: CreateOrderDto): Promise<CreateOrderResult> {
     if (
       !Number.isInteger(input.durationMinutes) ||
       input.durationMinutes <= 0 ||
@@ -73,6 +82,14 @@ export class PaymentsService {
 
     const reservation = await this.reservePaymentLink(input);
     const paymentLink = await this.createPaymentLink(reservation);
+    if (!paymentLink) {
+      return this.withRealtimeAccessToken({
+        orderId: reservation.orderId,
+        amount: reservation.amount,
+        currency: reservation.currency,
+        payment: { provider: "PAYOS", paymentPending: true },
+      });
+    }
     try {
       await this.persistPaymentLink(reservation.paymentId, paymentLink);
     } catch (error: unknown) {
@@ -84,7 +101,7 @@ export class PaymentsService {
       );
     }
 
-    const result = {
+    return this.withRealtimeAccessToken({
       orderId: reservation.orderId,
       amount: reservation.amount,
       currency: reservation.currency,
@@ -92,18 +109,10 @@ export class PaymentsService {
         provider: "PAYOS" as const,
         checkoutUrl: paymentLink.checkoutUrl,
       },
-    };
-    return this.gateway
-      ? {
-          ...result,
-          realtimeAccessToken: this.gateway.issueAccessToken(result.orderId),
-        }
-      : result;
+    });
   }
 
-  async getPaymentLink(
-    orderId: string,
-  ): Promise<{ provider: "PAYOS"; checkoutUrl: string }> {
+  async getPaymentLink(orderId: string): Promise<PaymentLinkResponse> {
     const payment = await this.dataSource
       .getRepository(PaymentTransaction)
       .findOne({
@@ -120,19 +129,18 @@ export class PaymentsService {
       };
     }
 
-    const paymentLink = await this.payosClient.getPaymentLinkInfo(
+    const paymentLink = await this.reconcilePaymentLink(
+      payment.id,
       parsePositiveOrderCode(payment.order.payosOrderCode),
     );
-    await this.persistPaymentLink(payment.id, paymentLink);
-    return {
-      provider: "PAYOS",
-      checkoutUrl: paymentLink.checkoutUrl,
-    };
+    return paymentLink
+      ? { provider: "PAYOS", checkoutUrl: paymentLink.checkoutUrl }
+      : { provider: "PAYOS", paymentPending: true };
   }
 
   private async createPaymentLink(
     reservation: PaymentLinkReservation,
-  ): Promise<PaymentLink> {
+  ): Promise<PaymentLink | null> {
     try {
       const paymentLink = await this.payosClient.createPaymentLink({
         amount: reservation.amount,
@@ -142,13 +150,76 @@ export class PaymentsService {
         cancelUrl: this.payosClient.cancelUrl,
       });
       if (!isPaymentLink(paymentLink)) {
-        throw new Error("PayOS returned an invalid payment link");
+        throw new PayosPaymentLinkDefinitiveError(
+          "PayOS returned an invalid payment link",
+        );
       }
       return paymentLink;
     } catch (error: unknown) {
-      await this.failPaymentLinkReservation(reservation.paymentId);
-      throw error;
+      if (error instanceof PayosPaymentLinkDefinitiveError) {
+        await this.failPaymentLinkReservation(reservation.paymentId);
+        throw error;
+      }
+      return this.reconcilePaymentLink(
+        reservation.paymentId,
+        reservation.orderCode,
+      );
     }
+  }
+
+  private async reconcilePaymentLink(
+    paymentId: string,
+    orderCode: number,
+  ): Promise<PaymentLink | null> {
+    let paymentLink: PaymentLink;
+    try {
+      paymentLink = await this.payosClient.getPaymentLinkInfo(orderCode);
+    } catch (error: unknown) {
+      this.logPaymentLinkRecoveryFailure(orderCode, error);
+      return null;
+    }
+    if (!isPaymentLink(paymentLink)) {
+      this.logger.warn(
+        "PayOS payment-link reconciliation returned an invalid response for order " +
+          orderCode,
+      );
+      return null;
+    }
+
+    try {
+      await this.persistPaymentLink(paymentId, paymentLink);
+    } catch (error: unknown) {
+      const details =
+        error instanceof Error ? (error.stack ?? error.message) : String(error);
+      this.logger.error(
+        "Failed to persist reconciled PayOS payment link; recovery is required",
+        details,
+      );
+    }
+    return paymentLink;
+  }
+
+  private withRealtimeAccessToken(result: CreateOrderResult): CreateOrderResult {
+    return this.gateway
+      ? {
+          ...result,
+          realtimeAccessToken: this.gateway.issueAccessToken(result.orderId),
+        }
+      : result;
+  }
+
+  private logPaymentLinkRecoveryFailure(
+    orderCode: number,
+    error: unknown,
+  ): void {
+    const details =
+      error instanceof Error ? (error.stack ?? error.message) : String(error);
+    this.logger.warn(
+      "Unable to reconcile PayOS payment link for order " +
+        orderCode +
+        ": " +
+        details,
+    );
   }
 
   private async reservePaymentLink(
@@ -524,14 +595,7 @@ export class PaymentsService {
       return;
     }
 
-    void this.commandDispatcher.dispatch(commandId).catch((error: unknown) => {
-      const errorDetails =
-        error instanceof Error ? (error.stack ?? error.message) : String(error);
-      this.logger.error(
-        `Failed to dispatch start command ${commandId}`,
-        errorDetails,
-      );
-    });
+    this.commandDispatcher.dispatchWhenIotReady(commandId);
   }
 
   private async findPaymentForMockCheckout(

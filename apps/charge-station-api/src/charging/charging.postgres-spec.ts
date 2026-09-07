@@ -87,7 +87,7 @@ describe("Charging reliability with local PostgreSQL", () => {
       ConnectorStatus.AVAILABLE,
       DeviceCommandStatus.FAILED,
     );
-    const dispatcher = { dispatch: vi.fn().mockResolvedValue(undefined) };
+    const dispatcher = { dispatchWhenIotReady: vi.fn() };
     const service = new ChargingService(
       dataSource,
       dispatcher as unknown as CommandDispatcherService,
@@ -130,7 +130,65 @@ describe("Charging reliability with local PostgreSQL", () => {
     expect(commands[1].commandId).not.toBe(fixture.command.commandId);
     expect(session.status).toBe(ChargingSessionStatus.PENDING);
     expect(connector.status).toBe(ConnectorStatus.OCCUPIED);
-    expect(dispatcher.dispatch).toHaveBeenCalledWith(commands[1].commandId);
+    expect(dispatcher.dispatchWhenIotReady).toHaveBeenCalledWith(
+      commands[1].commandId,
+    );
+  });
+
+  it("keeps a retried start pending at retry zero until IoT health recovers", async () => {
+    const fixture = await createFixture(
+      ChargingSessionStatus.START_FAILED,
+      ConnectorStatus.AVAILABLE,
+      DeviceCommandStatus.FAILED,
+    );
+    const iotClient = {
+      isHealthy: vi
+        .fn()
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true),
+      start: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn(),
+    };
+    const dispatcher = new ImmediateCommandDispatcherService(
+      dataSource,
+      iotClient as unknown as IotServiceClient,
+    );
+    const service = new ChargingService(dataSource, dispatcher);
+
+    vi.useFakeTimers();
+    try {
+      await expect(service.retryStart(fixture.session.id)).resolves.toEqual({
+        accepted: true,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const pendingCommand = await dataSource
+        .getRepository(DeviceCommand)
+        .findOneByOrFail({
+          session: { id: fixture.session.id },
+          status: DeviceCommandStatus.PENDING,
+        });
+      expect(iotClient.isHealthy).toHaveBeenCalledTimes(1);
+      expect(iotClient.start).not.toHaveBeenCalled();
+      expect(pendingCommand).toMatchObject({ retryCount: 0, nextAttemptAt: null });
+
+      await vi.advanceTimersByTimeAsync(250);
+
+      const dispatchedCommand = await dataSource
+        .getRepository(DeviceCommand)
+        .findOneByOrFail({ id: pendingCommand.id });
+      expect(iotClient.isHealthy).toHaveBeenCalledTimes(2);
+      expect(iotClient.start).toHaveBeenCalledTimes(1);
+      expect(dispatchedCommand).toMatchObject({
+        status: DeviceCommandStatus.SENT,
+        retryCount: 0,
+        nextAttemptAt: null,
+      });
+    } finally {
+      dispatcher.onApplicationShutdown();
+      vi.useRealTimers();
+    }
   });
 
   it("retains connector allocation after an ambiguous start transport outage", async () => {

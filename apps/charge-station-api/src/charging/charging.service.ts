@@ -241,14 +241,7 @@ export class ChargingService {
       return;
     }
 
-    void this.commandDispatcher.dispatch(commandId).catch((error: unknown) => {
-      const errorDetails =
-        error instanceof Error ? (error.stack ?? error.message) : String(error);
-      this.logger.error(
-        `Failed to dispatch retry start command ${commandId}`,
-        errorDetails,
-      );
-    });
+    this.commandDispatcher.dispatchWhenIotReady(commandId);
   }
 }
 

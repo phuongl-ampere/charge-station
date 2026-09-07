@@ -41,6 +41,47 @@ interface PayosPaymentLinkResponse {
 const PAYOS_PAYMENT_REQUEST_URL =
   "https://api-merchant.payos.vn/v2/payment-requests";
 
+interface PayosPaymentLinkErrorOptions {
+  httpStatus?: number;
+  cause?: unknown;
+}
+
+abstract class PayosPaymentLinkCreationError extends Error {
+  abstract readonly classification: "DEFINITIVE" | "AMBIGUOUS";
+  readonly httpStatus?: number;
+
+  protected constructor(
+    message: string,
+    options: PayosPaymentLinkErrorOptions = {},
+  ) {
+    super(message, { cause: options.cause });
+    this.name = new.target.name;
+    this.httpStatus = options.httpStatus;
+  }
+}
+
+export class PayosPaymentLinkDefinitiveError extends PayosPaymentLinkCreationError {
+  readonly classification = "DEFINITIVE" as const;
+
+  constructor(
+    message: string,
+    options: PayosPaymentLinkErrorOptions = {},
+  ) {
+    super(message, options);
+  }
+}
+
+export class PayosPaymentLinkAmbiguousError extends PayosPaymentLinkCreationError {
+  readonly classification = "AMBIGUOUS" as const;
+
+  constructor(
+    message: string,
+    options: PayosPaymentLinkErrorOptions = {},
+  ) {
+    super(message, options);
+  }
+}
+
 export class PayosClient {
   constructor(private readonly config: PayosClientConfig = readPayosConfig()) {}
 
@@ -81,25 +122,25 @@ export class PayosClient {
       },
       this.config.checksumKey,
     );
-    const response = await axios.post<PayosPaymentLinkResponse>(
-      PAYOS_PAYMENT_REQUEST_URL,
-      { ...input, amount, signature },
-      {
-        headers: {
-          "x-client-id": this.config.clientId,
-          "x-api-key": this.config.apiKey,
-          "content-type": "application/json",
+    try {
+      const response = await axios.post<PayosPaymentLinkResponse>(
+        PAYOS_PAYMENT_REQUEST_URL,
+        { ...input, amount, signature },
+        {
+          headers: {
+            "x-client-id": this.config.clientId,
+            "x-api-key": this.config.apiKey,
+            "content-type": "application/json",
+          },
         },
-      },
-    );
-    const checkoutUrl = response.data.data?.checkoutUrl;
-    const paymentLinkId = response.data.data?.paymentLinkId;
-
-    if (response.data.code !== "00" || !checkoutUrl || !paymentLinkId) {
-      throw new Error("PayOS payment link creation failed");
+      );
+      return readPaymentLink(
+        response.data,
+        "PayOS payment link creation failed",
+      );
+    } catch (error: unknown) {
+      throw classifyCreatePaymentLinkError(error);
     }
-
-    return { checkoutUrl, paymentLinkId };
   }
 
   async getPaymentLinkInfo(orderCode: number): Promise<PaymentLink> {
@@ -128,14 +169,7 @@ export class PayosClient {
         },
       },
     );
-    const checkoutUrl = response.data.data?.checkoutUrl;
-    const paymentLinkId = response.data.data?.paymentLinkId;
-
-    if (response.data.code !== "00" || !checkoutUrl || !paymentLinkId) {
-      throw new Error("PayOS payment link lookup failed");
-    }
-
-    return { checkoutUrl, paymentLinkId };
+    return readPaymentLink(response.data, "PayOS payment link lookup failed");
   }
 
   verifyWebhook(data: Record<string, unknown>, signature: string): boolean {
@@ -148,15 +182,83 @@ export class PayosClient {
 
   private validatePaymentLinkInput(input: CreatePaymentLinkInput): void {
     if (!Number.isSafeInteger(input.orderCode) || input.orderCode <= 0) {
-      throw new Error("PayOS order code must be a positive safe integer");
+      throw new PayosPaymentLinkDefinitiveError(
+        "PayOS order code must be a positive safe integer",
+      );
     }
     if (!Number.isInteger(input.amount) || input.amount <= 0) {
-      throw new Error("PayOS amount must be a positive whole VND amount");
+      throw new PayosPaymentLinkDefinitiveError(
+        "PayOS amount must be a positive whole VND amount",
+      );
     }
     if (!/^[\x20-\x7E]{25}$/.test(input.description)) {
-      throw new Error("PayOS description must be exactly 25 ASCII characters");
+      throw new PayosPaymentLinkDefinitiveError(
+        "PayOS description must be exactly 25 ASCII characters",
+      );
     }
   }
+}
+
+function classifyCreatePaymentLinkError(
+  error: unknown,
+): PayosPaymentLinkCreationError {
+  if (error instanceof PayosPaymentLinkCreationError) {
+    return error;
+  }
+
+  if (axios.isAxiosError(error)) {
+    const httpStatus = error.response?.status;
+    if (httpStatus !== undefined && httpStatus >= 400 && httpStatus < 500) {
+      return new PayosPaymentLinkDefinitiveError(
+        "PayOS payment link creation was rejected: " + httpStatus,
+        { httpStatus, cause: error },
+      );
+    }
+    return new PayosPaymentLinkAmbiguousError(
+      "PayOS payment link creation outcome is ambiguous",
+      { httpStatus, cause: error },
+    );
+  }
+
+  return new PayosPaymentLinkAmbiguousError(
+    "PayOS payment link creation outcome is ambiguous",
+    { cause: error },
+  );
+}
+
+function readPaymentLink(
+  response: unknown,
+  errorMessage: string,
+): PaymentLink {
+  if (!isPaymentLinkResponse(response)) {
+    throw new PayosPaymentLinkDefinitiveError(errorMessage);
+  }
+
+  return response.data;
+}
+
+function isPaymentLinkResponse(
+  value: unknown,
+): value is { code: "00"; data: PaymentLink } {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("code" in value) ||
+    value.code !== "00" ||
+    !("data" in value) ||
+    typeof value.data !== "object" ||
+    value.data === null ||
+    !("checkoutUrl" in value.data) ||
+    typeof value.data.checkoutUrl !== "string" ||
+    !value.data.checkoutUrl ||
+    !("paymentLinkId" in value.data) ||
+    typeof value.data.paymentLinkId !== "string" ||
+    !value.data.paymentLinkId
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 function readPayosConfig(): PayosClientConfig {

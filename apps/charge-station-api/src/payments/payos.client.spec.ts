@@ -1,7 +1,11 @@
 import axios from "axios";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PayosClient } from "./payos.client.js";
+import {
+  PayosClient,
+  PayosPaymentLinkAmbiguousError,
+  PayosPaymentLinkDefinitiveError,
+} from "./payos.client.js";
 
 describe("PayosClient mock provider", () => {
   afterEach(() => {
@@ -29,6 +33,66 @@ describe("PayosClient mock provider", () => {
     ).resolves.toEqual({
       checkoutUrl: "http://localhost:4000/payments/payos/mock/100001",
       paymentLinkId: "mock_100001",
+    });
+  });
+
+  it("classifies a provider 4xx rejection as definitive", async () => {
+    vi.spyOn(axios, "post").mockRejectedValue(
+      Object.assign(new Error("invalid request"), {
+        isAxiosError: true,
+        response: { status: 422 },
+      }),
+    );
+    const client = createLiveClient();
+
+    await expect(client.createPaymentLink(createInput())).rejects.toBeInstanceOf(
+      PayosPaymentLinkDefinitiveError,
+    );
+    await expect(client.createPaymentLink(createInput())).rejects.toMatchObject({
+      classification: "DEFINITIVE",
+      httpStatus: 422,
+    });
+  });
+
+  it("classifies a provider timeout and 5xx response as ambiguous", async () => {
+    const post = vi.spyOn(axios, "post");
+    post.mockRejectedValueOnce(
+      Object.assign(new Error("timeout"), {
+        isAxiosError: true,
+        code: "ECONNABORTED",
+      }),
+    );
+    post.mockRejectedValueOnce(
+      Object.assign(new Error("unavailable"), {
+        isAxiosError: true,
+        response: { status: 503 },
+      }),
+    );
+    const client = createLiveClient();
+
+    await expect(client.createPaymentLink(createInput())).rejects.toBeInstanceOf(
+      PayosPaymentLinkAmbiguousError,
+    );
+    await expect(client.createPaymentLink(createInput())).rejects.toMatchObject({
+      classification: "AMBIGUOUS",
+      httpStatus: 503,
+    });
+  });
+
+  it("classifies a malformed successful creation response as definitive", async () => {
+    vi.spyOn(axios, "post").mockResolvedValue({
+      data: {
+        code: "00",
+        data: { checkoutUrl: "https://pay.example/100001" },
+      },
+    } as never);
+    const client = createLiveClient();
+
+    await expect(client.createPaymentLink(createInput())).rejects.toBeInstanceOf(
+      PayosPaymentLinkDefinitiveError,
+    );
+    await expect(client.createPaymentLink(createInput())).rejects.toMatchObject({
+      classification: "DEFINITIVE",
     });
   });
 
@@ -116,3 +180,24 @@ describe("PayosClient mock provider", () => {
     );
   });
 });
+
+function createLiveClient(): PayosClient {
+  return new PayosClient({
+    mode: "live",
+    clientId: "client-id",
+    apiKey: "api-key",
+    checksumKey: "checksum-key",
+    returnUrl: "https://example.test/return",
+    cancelUrl: "https://example.test/cancel",
+  });
+}
+
+function createInput() {
+  return {
+    amount: 10000,
+    orderCode: 100001,
+    description: "Charge ST01C01 2h        ",
+    returnUrl: "https://example.test/return",
+    cancelUrl: "https://example.test/cancel",
+  };
+}

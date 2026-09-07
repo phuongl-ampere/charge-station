@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 
-import { UnauthorizedException, ValidationPipe } from "@nestjs/common";
+import { Logger, UnauthorizedException, ValidationPipe } from "@nestjs/common";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { getDataSourceToken } from "@nestjs/typeorm";
@@ -23,6 +23,9 @@ import {
   entities,
   migrations,
   Order,
+  OrderStatus,
+  PaymentTransaction,
+  PaymentTransactionStatus,
   PricingPlan,
   Station,
 } from "../database/data-source.js";
@@ -31,6 +34,7 @@ import { OrdersController } from "../orders/orders.controller.js";
 import { OrdersService } from "../orders/orders.service.js";
 import {
   PayosClient,
+  PayosPaymentLinkAmbiguousError,
   type PayosWebhookData,
 } from "../payments/payos.client.js";
 import { PaymentsController } from "../payments/payments.controller.js";
@@ -92,6 +96,13 @@ describe("charge capability boundary", () => {
       station,
       pricingPlan,
     });
+    await dataSource.getRepository(Connector).save({
+      id: randomUUID(),
+      code: "ST01-C03",
+      status: ConnectorStatus.AVAILABLE,
+      station,
+      pricingPlan,
+    });
 
     payosClient = new PayosClient({
       mode: "mock",
@@ -111,7 +122,10 @@ describe("charge capability boundary", () => {
         { provide: PayosClient, useValue: payosClient },
         {
           provide: CommandDispatcherService,
-          useValue: { dispatch: vi.fn().mockResolvedValue(undefined) },
+          useValue: {
+            dispatch: vi.fn().mockResolvedValue(undefined),
+            dispatchWhenIotReady: vi.fn(),
+          },
         },
         {
           provide: AuthService,
@@ -140,6 +154,102 @@ describe("charge capability boundary", () => {
       delete process.env.JWT_SECRET;
     } else {
       process.env.JWT_SECRET = previousJwtSecret;
+    }
+  });
+
+  it("preserves an ambiguous payment reservation for a later signed paid webhook", async () => {
+    const createPaymentLink = vi
+      .spyOn(payosClient, "createPaymentLink")
+      .mockRejectedValue(
+        new PayosPaymentLinkAmbiguousError(
+          "PayOS payment creation timed out",
+        ),
+      );
+    const getPaymentLinkInfo = vi
+      .spyOn(payosClient, "getPaymentLinkInfo")
+      .mockRejectedValue(
+        new PayosPaymentLinkAmbiguousError("PayOS lookup is unavailable"),
+      );
+    const logger = vi
+      .spyOn(Logger.prototype, "warn")
+      .mockImplementation(() => undefined);
+
+    try {
+      const created = await request(app.getHttpServer())
+        .post("/orders")
+        .send({ connectorCode: "ST01-C03", durationMinutes: 60 })
+        .expect(201);
+      expect(created.body.payment).toEqual({
+        provider: "PAYOS",
+        paymentPending: true,
+      });
+      expect(created.body.realtimeAccessToken).toEqual(expect.any(String));
+
+      const order = await dataSource.getRepository(Order).findOneByOrFail({
+        id: created.body.orderId,
+      });
+      const payment = await dataSource
+        .getRepository(PaymentTransaction)
+        .findOneByOrFail({ order: { id: order.id } });
+      expect(payment).toMatchObject({
+        status: PaymentTransactionStatus.PENDING,
+        checkoutUrl: null,
+      });
+      expect(order.status).toBe(OrderStatus.PENDING_PAYMENT);
+      expect(
+        (
+          await dataSource
+            .getRepository(Connector)
+            .findOneByOrFail({ code: "ST01-C03" })
+        ).status,
+      ).toBe(ConnectorStatus.OCCUPIED);
+
+      await request(app.getHttpServer())
+        .get("/orders/" + order.id + "/payment-link")
+        .expect(401);
+      await request(app.getHttpServer())
+        .get("/orders/" + order.id + "/payment-link")
+        .set("authorization", "Bearer " + created.body.realtimeAccessToken)
+        .expect(200)
+        .expect({ provider: "PAYOS", paymentPending: true });
+
+      const data: PayosWebhookData = {
+        orderCode: Number(order.payosOrderCode),
+        amount: order.amountVnd,
+        paymentLinkId: "payos_" + order.payosOrderCode,
+        status: "PAID",
+      };
+      await request(app.getHttpServer())
+        .post("/payments/payos/webhook")
+        .send({
+          code: "00",
+          success: true,
+          data,
+          signature: payosClient.signWebhook(data),
+        })
+        .expect(201);
+
+      expect(
+        await dataSource
+          .getRepository(ChargingSession)
+          .countBy({ order: { id: order.id } }),
+      ).toBe(1);
+      expect(await dataSource.getRepository(DeviceCommand).count()).toBe(1);
+      expect(
+        (
+          await dataSource
+            .getRepository(PaymentTransaction)
+            .findOneByOrFail({ id: payment.id })
+        ).status,
+      ).toBe(PaymentTransactionStatus.PAID);
+      expect(
+        (await dataSource.getRepository(Order).findOneByOrFail({ id: order.id }))
+          .status,
+      ).toBe(OrderStatus.PAID);
+    } finally {
+      logger.mockRestore();
+      getPaymentLinkInfo.mockRestore();
+      createPaymentLink.mockRestore();
     }
   });
 
