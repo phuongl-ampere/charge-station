@@ -25,6 +25,33 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("retryStart", () => {
+  it("posts the session capability to the local retry endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ accepted: true }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      createChargeApi(localApiOrigin).retryStart(
+        "session/with spaces",
+        "capability-token",
+      ),
+    ).resolves.toEqual({ accepted: true });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${localApiOrigin}/sessions/session%2Fwith%20spaces/retry-start`,
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          authorization: "Bearer capability-token",
+        },
+      }),
+    );
+  });
+});
+
 describe("createOrder checkout URL validation", () => {
   it("accepts a local mock checkout under the validated local API origin", async () => {
     mockOrderResponse(

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Logger } from '@nestjs/common';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DataSource } from 'typeorm';
 
 import {
@@ -31,6 +32,7 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
   let createdOrderId: string;
 
   beforeAll(async () => {
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     adminDataSource = new DataSource({ type: 'postgres', url: databaseUrl });
     await adminDataSource.initialize();
     await adminDataSource.query(`CREATE SCHEMA "${schema}"`);
@@ -78,6 +80,7 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
   });
 
   afterAll(async () => {
+    vi.restoreAllMocks();
     if (dataSource?.isInitialized) {
       await dataSource.destroy();
     }

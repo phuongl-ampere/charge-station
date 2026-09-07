@@ -316,4 +316,162 @@ describe("ChargingStatus", () => {
 
     expect(api.retryStart).toHaveBeenCalledWith("ses_1", "retry-capability");
   });
+
+  it("does not expose retry when the device has not reported a start failure", async () => {
+    const api = {
+      getOrder: vi.fn().mockResolvedValue({
+        amountVnd: 5000,
+        connectorCode: "ST01-C01",
+        currency: "VND",
+        durationMinutes: 60,
+        id: "ord_1",
+        payment: { provider: "PAYOS", status: "PAID" },
+        sessionId: "ses_1",
+        status: "PAID",
+      }),
+      getSession: vi.fn().mockResolvedValue({
+        estimatedRemainingSeconds: null,
+        id: "ses_1",
+        lastDeviceEventAt: null,
+        operationalWarning: null,
+        orderId: "ord_1",
+        status: "DEVICE_OFFLINE",
+        timerAuthority: "DEVICE",
+      }),
+      retryStart: vi.fn(),
+      stopSession: vi.fn(),
+    };
+
+    render(
+      <ChargingStatus
+        orderId="ord_1"
+        accessToken="capability-token"
+        api={api}
+        socket={{
+          connected: false,
+          disconnect: vi.fn(),
+          emit: vi.fn(),
+          off: vi.fn(),
+          on: vi.fn(),
+        }}
+      />,
+    );
+
+    await screen.findByText("DEVICE_OFFLINE");
+    expect(
+      screen.queryByRole("button", { name: "Retry charging start" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("prevents duplicate retry clicks while a retry is pending", async () => {
+    const user = userEvent.setup();
+    let resolveRetry: (() => void) | undefined;
+    const retryPromise = new Promise<{ accepted: true }>((resolve) => {
+      resolveRetry = () => resolve({ accepted: true });
+    });
+    const api = {
+      getOrder: vi.fn().mockResolvedValue({
+        amountVnd: 5000,
+        connectorCode: "ST01-C01",
+        currency: "VND",
+        durationMinutes: 60,
+        id: "ord_1",
+        payment: { provider: "PAYOS", status: "PAID" },
+        sessionId: "ses_1",
+        status: "PAID",
+      }),
+      getSession: vi.fn().mockResolvedValue({
+        estimatedRemainingSeconds: null,
+        id: "ses_1",
+        lastDeviceEventAt: null,
+        operationalWarning: null,
+        orderId: "ord_1",
+        status: "START_FAILED",
+        timerAuthority: "DEVICE",
+      }),
+      retryStart: vi.fn().mockReturnValue(retryPromise),
+      stopSession: vi.fn(),
+    };
+
+    render(
+      <ChargingStatus
+        orderId="ord_1"
+        accessToken="retry-capability"
+        api={api}
+        socket={{
+          connected: false,
+          disconnect: vi.fn(),
+          emit: vi.fn(),
+          off: vi.fn(),
+          on: vi.fn(),
+        }}
+      />,
+    );
+
+    const button = await screen.findByRole("button", {
+      name: "Retry charging start",
+    });
+    await user.click(button);
+
+    expect(api.retryStart).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole("button", { name: "Retrying start" }),
+    ).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Retrying start" }));
+    expect(api.retryStart).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveRetry?.();
+      await retryPromise;
+    });
+  });
+
+  it("shows retry errors from the station", async () => {
+    const user = userEvent.setup();
+    const api = {
+      getOrder: vi.fn().mockResolvedValue({
+        amountVnd: 5000,
+        connectorCode: "ST01-C01",
+        currency: "VND",
+        durationMinutes: 60,
+        id: "ord_1",
+        payment: { provider: "PAYOS", status: "PAID" },
+        sessionId: "ses_1",
+        status: "PAID",
+      }),
+      getSession: vi.fn().mockResolvedValue({
+        estimatedRemainingSeconds: null,
+        id: "ses_1",
+        lastDeviceEventAt: null,
+        operationalWarning: null,
+        orderId: "ord_1",
+        status: "START_FAILED",
+        timerAuthority: "DEVICE",
+      }),
+      retryStart: vi.fn().mockRejectedValue(new Error("Connector is not available")),
+      stopSession: vi.fn(),
+    };
+
+    render(
+      <ChargingStatus
+        orderId="ord_1"
+        accessToken="retry-capability"
+        api={api}
+        socket={{
+          connected: false,
+          disconnect: vi.fn(),
+          emit: vi.fn(),
+          off: vi.fn(),
+          on: vi.fn(),
+        }}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Retry charging start" }),
+    );
+
+    expect(await screen.findByText("Connector is not available")).toBeVisible();
+  });
 });

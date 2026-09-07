@@ -1,12 +1,20 @@
 import { randomUUID } from 'node:crypto';
 
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getDataSourceToken } from '@nestjs/typeorm';
 import { DataType, newDb } from 'pg-mem';
 import request from 'supertest';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import { DataSource } from 'typeorm';
 
 import {
@@ -33,6 +41,7 @@ describe('PayOS payment API', () => {
   let payosClient: PayosClient;
 
   beforeAll(async () => {
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     const database = newDb({ autoCreateForeignKeyIndices: true });
     database.public.registerFunction({
       name: 'version',
@@ -98,6 +107,7 @@ describe('PayOS payment API', () => {
   });
 
   afterAll(async () => {
+    vi.restoreAllMocks();
     await app.close();
     await dataSource.destroy();
   });
