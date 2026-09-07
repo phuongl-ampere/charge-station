@@ -286,11 +286,13 @@ describe('mock payment-to-charging lifecycle', () => {
     );
     expect(runningSession.timerAuthority).toBe('DEVICE');
     expect(deviceState.getSession(runningSession.id)?.status).toBe('RUNNING');
-    expect(
-      await dataSource.getRepository(DeviceEvent).countBy({
-        eventType: 'RUNNING',
-      }),
-    ).toBe(1);
+    await eventually(
+      () =>
+        dataSource.getRepository(DeviceEvent).countBy({
+          eventType: 'RUNNING',
+        }),
+      (count) => count === 1,
+    );
     const persistedSession = await dataSource
       .getRepository(ChargingSession)
       .findOneByOrFail({ id: runningSession.id });
@@ -307,11 +309,13 @@ describe('mock payment-to-charging lifecycle', () => {
     expect(deviceState.getCommand(deviceState.startTimerCommands[0].commandId)?.status).toBe(
       'STOPPED',
     );
-    expect(
-      await dataSource.getRepository(DeviceEvent).countBy({
-        eventType: 'STOPPED',
-      }),
-    ).toBe(1);
+    await eventually(
+      () =>
+        dataSource.getRepository(DeviceEvent).countBy({
+          eventType: 'STOPPED',
+        }),
+      (count) => count === 1,
+    );
     expect(
       (await dataSource.getRepository(Connector).findOneByOrFail({
         code: 'ST01-C01',
