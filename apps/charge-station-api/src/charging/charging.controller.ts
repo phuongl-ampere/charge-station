@@ -46,6 +46,19 @@ export class ChargingController {
     );
     return this.chargingService.stopSession(id);
   }
+
+  @Post("sessions/:id/retry-start")
+  @HttpCode(HttpStatus.ACCEPTED)
+  async retryStart(
+    @Param("id") id: string,
+    @Headers("authorization") authorization: string | undefined,
+  ): Promise<unknown> {
+    await this.chargeGateway.authorizeSession(
+      id,
+      readBearerToken(authorization),
+    );
+    return this.chargingService.retryStart(id);
+  }
 }
 
 function readBearerToken(authorization: string | undefined): string {

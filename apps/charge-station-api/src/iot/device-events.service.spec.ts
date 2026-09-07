@@ -16,6 +16,25 @@ import {
 import { DeviceEventsService } from "./device-events.service.js";
 
 describe("DeviceEventsService", () => {
+  it("treats RUNNING as definitive when COMMAND_ACCEPTED was lost", async () => {
+    const harness = createHarness(ChargingSessionStatus.PENDING);
+    const service = new DeviceEventsService(
+      harness.dataSource as unknown as DataSource,
+    );
+
+    await service.handle(
+      createEvent(harness.command.commandId, harness.session.id, {
+        type: "RUNNING",
+        payload: { relayState: "ON", remainingSeconds: 3600 },
+      }),
+    );
+
+    expect(harness.session.status).toBe(ChargingSessionStatus.CHARGING);
+    expect(harness.session.startedAt).toEqual(
+      new Date("2026-09-08T11:00:00.000Z"),
+    );
+  });
+
   it("changes a session to CHARGING once when RUNNING arrives twice", async () => {
     const harness = createHarness(ChargingSessionStatus.STARTING);
     const service = new DeviceEventsService(
@@ -131,6 +150,54 @@ describe("DeviceEventsService", () => {
     expect(harness.connectorRepository.save).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { mode: "timeout", reason: "TIMEOUT", offline: false },
+    { mode: "command_failed", reason: "COMMAND_FAILED", offline: false },
+    { mode: "offline", reason: "DEVICE_OFFLINE", offline: true },
+  ])(
+    "releases the connector only after STOPPED in the $mode mock failure sequence",
+    async ({ reason, offline }) => {
+      const harness = createHarness(ChargingSessionStatus.PENDING);
+      const service = new DeviceEventsService(
+        harness.dataSource as unknown as DataSource,
+      );
+
+      if (offline) {
+        await service.handle(
+          createEvent(harness.command.commandId, harness.session.id, {
+            type: "DEVICE_OFFLINE",
+            occurredAt: "2026-09-08T11:00:00.000Z",
+            payload: { reason, relayState: "OFF" },
+          }),
+        );
+      }
+      await service.handle(
+        createEvent(harness.command.commandId, harness.session.id, {
+          type: "COMMAND_FAILED",
+          occurredAt: "2026-09-08T11:01:00.000Z",
+          payload: { reason, relayState: "OFF" },
+        }),
+      );
+
+      expect(harness.session.status).toBe(ChargingSessionStatus.START_FAILED);
+      expect(harness.connector.status).toBe(ConnectorStatus.OCCUPIED);
+      expect(harness.session.operationalWarning).toBe(
+        offline ? "DEVICE_OFFLINE" : undefined,
+      );
+
+      await service.handle(
+        createEvent(harness.command.commandId, harness.session.id, {
+          type: "STOPPED",
+          occurredAt: "2026-09-08T11:02:00.000Z",
+          payload: { reason, relayState: "OFF" },
+        }),
+      );
+
+      expect(harness.session.status).toBe(ChargingSessionStatus.START_FAILED);
+      expect(harness.connector.status).toBe(ConnectorStatus.AVAILABLE);
+    },
+  );
+
   it("releases an occupied connector when STOPPED confirms relay-off after start failure", async () => {
     const harness = createHarness(ChargingSessionStatus.START_FAILED);
     const service = new DeviceEventsService(
@@ -147,6 +214,23 @@ describe("DeviceEventsService", () => {
     expect(harness.session.status).toBe(ChargingSessionStatus.START_FAILED);
     expect(harness.connector.status).toBe(ConnectorStatus.AVAILABLE);
     expect(harness.connectorRepository.save).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves STOPPING to CANCELLED when STOPPED confirms relay-off", async () => {
+    const harness = createHarness(ChargingSessionStatus.STOPPING);
+    const service = new DeviceEventsService(
+      harness.dataSource as unknown as DataSource,
+    );
+
+    await service.handle(
+      createEvent(harness.command.commandId, harness.session.id, {
+        type: "STOPPED",
+        payload: { reason: "TIMER_EXPIRED", relayState: "OFF" },
+      }),
+    );
+
+    expect(harness.session.status).toBe(ChargingSessionStatus.CANCELLED);
+    expect(harness.connector.status).toBe(ConnectorStatus.AVAILABLE);
   });
 
   it.each([
@@ -182,7 +266,11 @@ describe("DeviceEventsService", () => {
         }),
       );
 
-      expect(harness.session.status).toBe(ChargingSessionStatus.COMPLETED);
+      expect(harness.session.status).toBe(
+        status === ChargingSessionStatus.STOPPING
+          ? ChargingSessionStatus.CANCELLED
+          : ChargingSessionStatus.COMPLETED,
+      );
       expect(harness.session.stoppedAt).toBeInstanceOf(Date);
       expect(harness.connector.status).toBe(ConnectorStatus.AVAILABLE);
       expect(harness.connectorRepository.save).toHaveBeenCalledTimes(1);

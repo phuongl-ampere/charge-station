@@ -5,6 +5,7 @@ import type { DataSource } from "typeorm";
 import {
   ChargingSession,
   ChargingSessionStatus,
+  Connector,
   DeviceCommand,
   DeviceCommandStatus,
 } from "../database/data-source.js";
@@ -111,7 +112,208 @@ describe("ChargingController", () => {
     expect(chargingService.stopSession).not.toHaveBeenCalled();
   });
 
-  it("queues a stop command after persistence without changing session state", async () => {
+  it("authorizes a retry-start with the order capability before dispatching recovery", async () => {
+    const chargingService = {
+      retryStart: vi.fn().mockResolvedValue({ accepted: true }),
+    };
+    const gateway = {
+      authorizeSession: vi.fn().mockResolvedValue(undefined),
+    };
+    const controller = new ChargingController(
+      chargingService as unknown as ChargingService,
+      gateway as unknown as ChargeGateway,
+    );
+
+    await expect(
+      controller.retryStart("ses_1", "Bearer order-capability"),
+    ).resolves.toEqual({ accepted: true });
+
+    expect(gateway.authorizeSession).toHaveBeenCalledWith(
+      "ses_1",
+      "order-capability",
+    );
+    expect(chargingService.retryStart).toHaveBeenCalledWith("ses_1");
+  });
+
+  it("reuses the original failed start command and payload during recovery", async () => {
+    const expiry = new Date(Date.now() + 60 * 60_000).toISOString();
+    const originalPayload = {
+      stationCode: "ST01",
+      connectorCode: "ST01-C01",
+      deviceId: "dev_ST01",
+      sessionId: "ses_1",
+      durationSeconds: 7200,
+      expiresAt: expiry,
+      configVersion: 1,
+    };
+    const session = {
+      id: "ses_1",
+      status: ChargingSessionStatus.START_FAILED,
+      startedAt: null,
+      stoppedAt: null,
+      expectedEndAt: new Date(expiry),
+      connector: {
+        id: "con_1",
+        code: "ST01-C01",
+        status: "AVAILABLE",
+      },
+    } as ChargingSession;
+    const command = {
+      id: "cmd_row_1",
+      commandId: "cmd_start_1",
+      commandType: "START_CHARGING",
+      session,
+      payload: originalPayload,
+      retryCount: 3,
+      nextAttemptAt: new Date("2026-09-08T10:00:00.000Z"),
+      status: DeviceCommandStatus.FAILED,
+      acknowledgedAt: new Date("2026-09-08T10:00:00.000Z"),
+    } as DeviceCommand;
+    const sessionRepository = {
+      findOneBy: vi.fn().mockResolvedValue(session),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const commandRepository = {
+      findOne: vi.fn().mockResolvedValue(command),
+      create: vi.fn(),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const connectorRepository = {
+      findOne: vi.fn().mockResolvedValue(session.connector),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const manager = {
+      query: vi.fn().mockImplementation(async (query: string) => {
+        if (query.includes("FROM charging_sessions"))
+          return [{ id: session.id }];
+        if (query.includes("FROM connectors")) {
+          return [{ id: session.connector.id }];
+        }
+        throw new Error("Unexpected lock query");
+      }),
+      getRepository: vi.fn((entity) => {
+        if (entity === ChargingSession) return sessionRepository;
+        if (entity === DeviceCommand) return commandRepository;
+        if (entity === Connector) return connectorRepository;
+        throw new Error("Unexpected repository");
+      }),
+    };
+    const dataSource = {
+      transaction: vi.fn(async (callback) => callback(manager)),
+    };
+    const dispatcher = { dispatch: vi.fn().mockResolvedValue(undefined) };
+    const service = new ChargingService(
+      dataSource as unknown as DataSource,
+      dispatcher as unknown as CommandDispatcherService,
+    );
+
+    await expect(service.retryStart(session.id)).resolves.toEqual({
+      accepted: true,
+    });
+
+    expect(manager.query).toHaveBeenCalledWith(
+      expect.stringContaining("FROM charging_sessions"),
+      [session.id],
+    );
+    expect(manager.query).toHaveBeenCalledWith(
+      expect.stringContaining("FROM connectors"),
+      [session.connector.id],
+    );
+    expect(commandRepository.create).not.toHaveBeenCalled();
+    expect(command.commandId).toBe("cmd_start_1");
+    expect(command.payload).toEqual(originalPayload);
+    expect(command).toMatchObject({
+      retryCount: 0,
+      nextAttemptAt: null,
+      status: DeviceCommandStatus.PENDING,
+      acknowledgedAt: null,
+    });
+    expect(session.status).toBe(ChargingSessionStatus.PENDING);
+    expect(session.connector.status).toBe("OCCUPIED");
+    expect(dispatcher.dispatch).toHaveBeenCalledWith("cmd_start_1");
+  });
+
+  it.each([
+    {
+      name: "expired original payload",
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      connectorStatus: "AVAILABLE",
+    },
+    {
+      name: "occupied connector",
+      expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+      connectorStatus: "OCCUPIED",
+    },
+  ])(
+    "rejects retry-start with a $name",
+    async ({ expiresAt, connectorStatus }) => {
+      const session = {
+        id: "ses_1",
+        status: ChargingSessionStatus.START_FAILED,
+        startedAt: null,
+        stoppedAt: null,
+        expectedEndAt: new Date(Date.now() + 60 * 60_000),
+        connector: {
+          id: "con_1",
+          status: connectorStatus,
+        },
+      } as ChargingSession;
+      const command = {
+        commandId: "cmd_start_1",
+        commandType: "START_CHARGING",
+        session,
+        payload: {
+          stationCode: "ST01",
+          connectorCode: "ST01-C01",
+          deviceId: "dev_ST01",
+          sessionId: session.id,
+          durationSeconds: 7200,
+          expiresAt,
+          configVersion: 1,
+        },
+        retryCount: 3,
+        status: DeviceCommandStatus.FAILED,
+      } as DeviceCommand;
+      const sessionRepository = {
+        findOneBy: vi.fn().mockResolvedValue(session),
+        save: vi.fn(),
+      };
+      const commandRepository = {
+        findOne: vi.fn().mockResolvedValue(command),
+        save: vi.fn(),
+      };
+      const connectorRepository = {
+        findOne: vi.fn().mockResolvedValue(session.connector),
+        save: vi.fn(),
+      };
+      const manager = {
+        query: vi.fn().mockImplementation(async (query: string) => {
+          if (query.includes("FROM charging_sessions"))
+            return [{ id: session.id }];
+          if (query.includes("FROM connectors")) {
+            return [{ id: session.connector.id }];
+          }
+          throw new Error("Unexpected lock query");
+        }),
+        getRepository: vi.fn((entity) => {
+          if (entity === ChargingSession) return sessionRepository;
+          if (entity === DeviceCommand) return commandRepository;
+          if (entity === Connector) return connectorRepository;
+          throw new Error("Unexpected repository");
+        }),
+      };
+      const service = new ChargingService({
+        transaction: async (callback) => callback(manager),
+      } as unknown as DataSource);
+
+      await expect(service.retryStart(session.id)).rejects.toThrow();
+      expect(commandRepository.save).not.toHaveBeenCalled();
+      expect(sessionRepository.save).not.toHaveBeenCalled();
+      expect(connectorRepository.save).not.toHaveBeenCalled();
+    },
+  );
+
+  it("locks a charging session and moves it to STOPPING with its stop command", async () => {
     const session = {
       id: "ses_1",
       status: ChargingSessionStatus.CHARGING,
@@ -122,6 +324,7 @@ describe("ChargingController", () => {
     } as ChargingSession;
     const sessionRepository = {
       findOneBy: vi.fn().mockResolvedValue(session),
+      save: vi.fn().mockImplementation(async (entity) => entity),
     };
     const commandRepository = {
       findOne: vi.fn().mockResolvedValue(null),
@@ -129,6 +332,7 @@ describe("ChargingController", () => {
       save: vi.fn().mockImplementation(async (entity) => entity),
     };
     const manager = {
+      query: vi.fn().mockResolvedValue([{ id: session.id }]),
       getRepository: vi.fn((entity) => {
         if (entity === ChargingSession) return sessionRepository;
         if (entity === DeviceCommand) return commandRepository;
@@ -165,10 +369,15 @@ describe("ChargingController", () => {
       }),
     );
     expect(commandRepository.save).toHaveBeenCalledTimes(1);
+    expect(manager.query).toHaveBeenCalledWith(
+      expect.stringContaining("FROM charging_sessions"),
+      [session.id],
+    );
+    expect(sessionRepository.save).toHaveBeenCalledWith(session);
     expect(dispatcher.dispatch).toHaveBeenCalledWith(
       commandRepository.create.mock.results[0]?.value.commandId,
     );
-    expect(session.status).toBe(ChargingSessionStatus.CHARGING);
+    expect(session.status).toBe(ChargingSessionStatus.STOPPING);
   });
 
   it("returns accepted before a slow dispatcher completes", async () => {
@@ -219,9 +428,13 @@ function createStopHarness(dispatch: (commandId: string) => Promise<void>) {
     save: vi.fn().mockImplementation(async (entity) => entity),
   };
   const manager = {
+    query: vi.fn().mockResolvedValue([{ id: session.id }]),
     getRepository: vi.fn((entity) => {
       if (entity === ChargingSession) {
-        return { findOneBy: vi.fn().mockResolvedValue(session) };
+        return {
+          findOneBy: vi.fn().mockResolvedValue(session),
+          save: vi.fn().mockImplementation(async (entity) => entity),
+        };
       }
       if (entity === DeviceCommand) return commandRepository;
       throw new Error("Unexpected repository");

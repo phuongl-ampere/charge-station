@@ -190,6 +190,87 @@ describe("CommandDispatcherService", () => {
     ]);
   });
 
+  it("marks an exhausted start retry failed, releases the connector, and publishes the terminal session state", async () => {
+    const command = createCommand();
+    const commandRepository = {
+      findOne: vi.fn().mockResolvedValue(command),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const sessionRepository = {
+      findOneBy: vi.fn().mockResolvedValue(command.session),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const connectorRepository = {
+      findOne: vi.fn().mockResolvedValue(command.session.connector),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const manager = {
+      query: vi.fn().mockImplementation(async (query: string) => {
+        if (query.includes("FROM charging_sessions")) {
+          return [{ id: command.session.id }];
+        }
+        if (query.includes("FROM connectors")) {
+          return [{ id: command.session.connector.id }];
+        }
+        throw new Error("Unexpected lock query");
+      }),
+      getRepository: vi.fn((entity) => {
+        if (entity === DeviceCommand) return commandRepository;
+        if (entity === ChargingSession) return sessionRepository;
+        if (entity === Connector) return connectorRepository;
+        throw new Error("Unexpected repository");
+      }),
+    };
+    const dataSource = {
+      getRepository: vi.fn().mockReturnValue(commandRepository),
+      transaction: vi.fn(async (callback) => callback(manager)),
+    };
+    const iotClient = {
+      start: vi
+        .fn()
+        .mockRejectedValue(new IotTransportError("connection refused")),
+    };
+    const gateway = { publishSession: vi.fn() };
+    const service = new CommandDispatcherService(
+      dataSource as unknown as DataSource,
+      iotClient as unknown as IotServiceClient,
+      gateway as never,
+    );
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-08T11:00:00.000Z"));
+    const wait = vi
+      .spyOn(service as never, "wait" as never)
+      .mockImplementation(async (...args: unknown[]) => {
+        const [delayMs] = args as [number];
+        vi.setSystemTime(new Date(Date.now() + delayMs));
+      });
+
+    try {
+      await expect(service.dispatch(command.commandId)).rejects.toThrow(
+        "connection refused",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(iotClient.start).toHaveBeenCalledTimes(4);
+    expect(wait).toHaveBeenNthCalledWith(1, 1_000);
+    expect(wait).toHaveBeenNthCalledWith(2, 5_000);
+    expect(wait).toHaveBeenNthCalledWith(3, 20_000);
+    expect(command.status).toBe(DeviceCommandStatus.FAILED);
+    expect(command.session.status).toBe(ChargingSessionStatus.START_FAILED);
+    expect(command.session.connector.status).toBe("AVAILABLE");
+    expect(sessionRepository.save).toHaveBeenCalledWith(command.session);
+    expect(connectorRepository.save).toHaveBeenCalledWith(
+      command.session.connector,
+    );
+    expect(gateway.publishSession).toHaveBeenCalledWith(
+      command.session.id,
+      "session.updated",
+      ChargingSessionStatus.START_FAILED,
+    );
+  });
+
   it("resumes a persisted retry at its scheduled attempt during bootstrap", async () => {
     const command = createCommand({
       retryCount: 1,

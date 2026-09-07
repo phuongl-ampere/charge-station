@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { Logger } from "@nestjs/common";
 import { describe, expect, it, vi } from "vitest";
 import type { DataSource } from "typeorm";
 
@@ -14,6 +15,7 @@ import {
   PaymentTransactionStatus,
 } from "../database/data-source.js";
 import type { CommandDispatcherService } from "../iot/command-dispatcher.service.js";
+import { IotTransportError } from "../iot/iot-service.client.js";
 import type { ChargeGateway } from "../realtime/charge.gateway.js";
 import type { PayosClient } from "./payos.client.js";
 import type { PayosWebhook } from "./payos.client.js";
@@ -89,7 +91,7 @@ describe("PaymentsService webhook processing", () => {
     );
   });
 
-  it("marks the order paid and creates exactly one start command for a valid webhook", async () => {
+  it("returns success after payment while a provider transport retry dispatch rejects asynchronously", async () => {
     const pendingOrder = {
       id: randomUUID(),
       payosOrderCode: "100001",
@@ -154,9 +156,13 @@ describe("PaymentsService webhook processing", () => {
     const client = {
       verifyWebhook: vi.fn().mockReturnValue(true),
     };
+    let rejectDispatch: (error: Error) => void = () => undefined;
     const commandDispatcher = {
-      dispatch: vi.fn(async () => {
+      dispatch: vi.fn(() => {
         expect(transactionCommitted).toBe(true);
+        return new Promise<void>((_resolve, reject) => {
+          rejectDispatch = reject;
+        });
       }),
     };
     const gateway = {
@@ -185,7 +191,27 @@ describe("PaymentsService webhook processing", () => {
       },
     };
 
-    await service.handleWebhook(body);
+    const logger = vi
+      .spyOn(Logger.prototype, "error")
+      .mockImplementation(() => undefined);
+    const webhook = service.handleWebhook(body);
+    const response = await Promise.race([
+      webhook,
+      new Promise<"timed out">((resolve) => {
+        setTimeout(() => resolve("timed out"), 25);
+      }),
+    ]);
+    rejectDispatch(new IotTransportError("IoT transport unavailable"));
+    await expect(webhook).resolves.toEqual({ success: true });
+    await vi.waitFor(() => {
+      expect(logger).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to dispatch start command"),
+        expect.any(String),
+      );
+    });
+    logger.mockRestore();
+
+    expect(response).toEqual({ success: true });
     await service.handleWebhook(body);
 
     expect(manager.query).toHaveBeenCalledWith(

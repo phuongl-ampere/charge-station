@@ -3,6 +3,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   OneToMany,
@@ -14,6 +15,7 @@ import { DataSource, type DataSourceOptions } from 'typeorm';
 
 import { InitialSchemaMigration } from './migrations/001-initial-schema.js';
 import { AddDeviceCommandRetryAndSessionState } from './migrations/002-device-command-retry-and-session-state.js';
+import { AddDeviceCommandSessionTypeUnique } from './migrations/003-device-command-session-type-unique.js';
 
 export enum UserRole {
   CUSTOMER = 'CUSTOMER',
@@ -273,6 +275,9 @@ export class ChargingSession {
 }
 
 @Entity('device_commands')
+@Index('uq_device_commands_session_command_type', ['session', 'commandType'], {
+  unique: true,
+})
 export class DeviceCommand {
   @PrimaryColumn('uuid')
   id!: string;
@@ -362,6 +367,7 @@ export const entities = [
 export const migrations = [
   InitialSchemaMigration,
   AddDeviceCommandRetryAndSessionState,
+  AddDeviceCommandSessionTypeUnique,
 ];
 
 export const databaseOptions: DataSourceOptions = {

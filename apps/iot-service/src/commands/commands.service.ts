@@ -111,17 +111,23 @@ export class CommandsService {
     const failureMode = this.failureMode();
     if (failureMode !== "none") {
       this.deviceState.stop(state);
+      const reason =
+        failureMode === "timeout"
+          ? "TIMEOUT"
+          : failureMode === "offline"
+            ? "DEVICE_OFFLINE"
+            : "COMMAND_FAILED";
       if (failureMode === "offline") {
         this.postEvent(state, "DEVICE_OFFLINE", {
           reason: "DEVICE_OFFLINE",
           relayState: state.relayState,
         });
-      } else {
-        this.postEvent(state, "COMMAND_FAILED", {
-          reason: failureMode === "timeout" ? "TIMEOUT" : "COMMAND_FAILED",
-          relayState: state.relayState,
-        });
       }
+      this.postEvent(state, "COMMAND_FAILED", {
+        reason,
+        relayState: state.relayState,
+      });
+      this.postStopped(state, reason);
       return;
     }
 

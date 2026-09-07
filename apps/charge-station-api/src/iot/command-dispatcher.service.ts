@@ -1,17 +1,27 @@
 import {
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
   OnApplicationBootstrap,
+  Optional,
 } from "@nestjs/common";
 import { InjectDataSource } from "@nestjs/typeorm";
 import type {
   StartChargingCommand,
   StopChargingCommand,
 } from "@charge-station/contracts";
-import { DataSource, Repository } from "typeorm";
+import { DataSource, EntityManager, Repository } from "typeorm";
 
-import { DeviceCommand, DeviceCommandStatus } from "../database/data-source.js";
+import {
+  ChargingSession,
+  ChargingSessionStatus,
+  Connector,
+  ConnectorStatus,
+  DeviceCommand,
+  DeviceCommandStatus,
+} from "../database/data-source.js";
+import { ChargeGateway } from "../realtime/charge.gateway.js";
 import { IotServiceClient, IotTransportError } from "./iot-service.client.js";
 
 const RETRY_DELAYS_MS = [1_000, 5_000, 20_000] as const;
@@ -23,6 +33,9 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly iotServiceClient: IotServiceClient,
+    @Optional()
+    @Inject(ChargeGateway)
+    private readonly gateway?: ChargeGateway,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
@@ -79,7 +92,7 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
           command.retryCount < 0 ||
           command.retryCount >= RETRY_DELAYS_MS.length
         ) {
-          await this.markFailed(command, commandRepository);
+          await this.markRetryExhausted(command, commandRepository);
           throw error;
         }
 
@@ -129,6 +142,66 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
     command.status = DeviceCommandStatus.FAILED;
     command.nextAttemptAt = null;
     await commandRepository.save(command);
+  }
+
+  private async markRetryExhausted(
+    command: DeviceCommand,
+    commandRepository: Repository<DeviceCommand>,
+  ): Promise<void> {
+    if (command.commandType !== "START_CHARGING") {
+      await this.markFailed(command, commandRepository);
+      return;
+    }
+
+    const result = await this.dataSource.transaction(async (manager) => {
+      const transactionalCommandRepository =
+        manager.getRepository(DeviceCommand);
+      const sessionId = await lockChargingSessionId(
+        manager,
+        command.session.id,
+      );
+      if (!sessionId) {
+        await this.markFailed(command, transactionalCommandRepository);
+        return null;
+      }
+
+      const sessionRepository = manager.getRepository(ChargingSession);
+      const connectorRepository = manager.getRepository(Connector);
+      const session = await sessionRepository.findOneBy({ id: sessionId });
+      if (!session) {
+        await this.markFailed(command, transactionalCommandRepository);
+        return null;
+      }
+
+      const connectorId = await lockConnectorId(manager, session.connector.id);
+      const connector = connectorId
+        ? await connectorRepository.findOne({ where: { id: connectorId } })
+        : null;
+      if (!connector) {
+        await this.markFailed(command, transactionalCommandRepository);
+        return null;
+      }
+
+      command.status = DeviceCommandStatus.FAILED;
+      command.nextAttemptAt = null;
+      session.status = ChargingSessionStatus.START_FAILED;
+      connector.status = ConnectorStatus.AVAILABLE;
+      session.connector = connector;
+
+      await transactionalCommandRepository.save(command);
+      await sessionRepository.save(session);
+      await connectorRepository.save(connector);
+
+      return { sessionId: session.id, status: session.status };
+    });
+
+    if (result) {
+      this.gateway?.publishSession(
+        result.sessionId,
+        "session.updated",
+        result.status,
+      );
+    }
   }
 
   private async dispatchPending(): Promise<void> {
@@ -219,4 +292,26 @@ function readString(
 
 function isPositiveInteger(value: unknown): value is number {
   return Number.isInteger(value) && typeof value === "number" && value > 0;
+}
+
+async function lockChargingSessionId(
+  manager: EntityManager,
+  sessionId: string,
+): Promise<string | null> {
+  const rows = await manager.query(
+    "SELECT id FROM charging_sessions WHERE id = $1 FOR UPDATE",
+    [sessionId],
+  );
+  return rows[0]?.id ?? null;
+}
+
+async function lockConnectorId(
+  manager: EntityManager,
+  connectorId: string,
+): Promise<string | null> {
+  const rows = await manager.query(
+    "SELECT id FROM connectors WHERE id = $1 FOR UPDATE",
+    [connectorId],
+  );
+  return rows[0]?.id ?? null;
 }

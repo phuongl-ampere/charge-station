@@ -108,9 +108,11 @@ describe("CommandsService", () => {
   it("safely handles a local callback redirect rejection", async () => {
     process.env.SERVICE_TOKEN = "test-service-token";
     process.env.CHARGE_STATION_API_URL = "http://localhost:4000";
-    const fetchMock = vi.fn().mockRejectedValue(
-      new TypeError("fetch failed because redirect mode is error"),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValue(
+        new TypeError("fetch failed because redirect mode is error"),
+      );
     vi.stubGlobal("fetch", fetchMock);
     const client = new ChargeStationEventClient();
     service = new CommandsService(client, deviceState);
@@ -154,11 +156,7 @@ describe("CommandsService", () => {
 
     release("RUNNING");
     await vi.advanceTimersByTimeAsync(0);
-    expect(postedTypes).toEqual([
-      "COMMAND_ACCEPTED",
-      "RUNNING",
-      "HEARTBEAT",
-    ]);
+    expect(postedTypes).toEqual(["COMMAND_ACCEPTED", "RUNNING", "HEARTBEAT"]);
 
     release("HEARTBEAT");
     await vi.advanceTimersByTimeAsync(0);
@@ -227,4 +225,52 @@ describe("CommandsService", () => {
       eventClient.post.mock.calls.filter(([event]) => event.type === "STOPPED"),
     ).toHaveLength(1);
   });
+
+  it.each([
+    {
+      mode: "timeout",
+      expectedTypes: ["COMMAND_ACCEPTED", "COMMAND_FAILED", "STOPPED"],
+    },
+    {
+      mode: "command_failed",
+      expectedTypes: ["COMMAND_ACCEPTED", "COMMAND_FAILED", "STOPPED"],
+    },
+    {
+      mode: "offline",
+      expectedTypes: [
+        "COMMAND_ACCEPTED",
+        "DEVICE_OFFLINE",
+        "COMMAND_FAILED",
+        "STOPPED",
+      ],
+    },
+  ])(
+    "turns the relay off and emits a terminal failure sequence for $mode",
+    async ({ mode, expectedTypes }) => {
+      const previousMode = process.env.MOCK_IOT_FAILURE_MODE;
+      process.env.MOCK_IOT_FAILURE_MODE = mode;
+
+      try {
+        await service.start(commandWithDuration(3));
+        await vi.advanceTimersByTimeAsync(100);
+
+        expect(deviceState.getConnector("ST01-C01")).toBeUndefined();
+        expect(
+          eventClient.post.mock.calls.map(([event]) => event.type),
+        ).toEqual(expectedTypes);
+        expect(eventClient.post).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            type: "STOPPED",
+            payload: expect.objectContaining({ relayState: "OFF" }),
+          }),
+        );
+      } finally {
+        if (previousMode === undefined) {
+          delete process.env.MOCK_IOT_FAILURE_MODE;
+        } else {
+          process.env.MOCK_IOT_FAILURE_MODE = previousMode;
+        }
+      }
+    },
+  );
 });

@@ -151,7 +151,10 @@ export class DeviceEventsService {
               }
               break;
             case "RUNNING":
-              if (session.status === ChargingSessionStatus.STARTING) {
+              if (
+                session.status === ChargingSessionStatus.PENDING ||
+                session.status === ChargingSessionStatus.STARTING
+              ) {
                 session.status = ChargingSessionStatus.CHARGING;
                 session.startedAt = occurredAt;
                 saveSession = true;
@@ -169,9 +172,11 @@ export class DeviceEventsService {
             case "STOPPED":
               if (isNonterminalSessionStatus(session.status)) {
                 session.status =
-                  event.payload.reason === "TIMER_EXPIRED"
-                    ? ChargingSessionStatus.COMPLETED
-                    : ChargingSessionStatus.CANCELLED;
+                  session.status === ChargingSessionStatus.STOPPING
+                    ? ChargingSessionStatus.CANCELLED
+                    : event.payload.reason === "TIMER_EXPIRED"
+                      ? ChargingSessionStatus.COMPLETED
+                      : ChargingSessionStatus.CANCELLED;
                 session.stoppedAt = occurredAt;
                 saveSession = true;
               }

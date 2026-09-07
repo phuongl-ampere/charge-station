@@ -4,6 +4,7 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from "@nestjs/common";
@@ -30,6 +31,8 @@ import { parsePayosWebhook } from "./payos-webhook.js";
 
 @Injectable()
 export class PaymentsService {
+  private readonly logger = new Logger(PaymentsService.name);
+
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     @Inject(PayosClient) private readonly payosClient: PayosClient,
@@ -297,7 +300,7 @@ export class PaymentsService {
       );
     }
     if (result.commandId) {
-      await this.commandDispatcher?.dispatch(result.commandId);
+      this.dispatchStartCommand(result.commandId);
     }
     return { success: true };
   }
@@ -370,6 +373,24 @@ export class PaymentsService {
       success: status === "PAID",
       data,
       signature: this.payosClient.signWebhook(data),
+    });
+  }
+
+  private dispatchStartCommand(commandId: string): void {
+    if (!this.commandDispatcher) {
+      this.logger.error(
+        `Failed to dispatch start command ${commandId}: dispatcher unavailable`,
+      );
+      return;
+    }
+
+    void this.commandDispatcher.dispatch(commandId).catch((error: unknown) => {
+      const errorDetails =
+        error instanceof Error ? (error.stack ?? error.message) : String(error);
+      this.logger.error(
+        `Failed to dispatch start command ${commandId}`,
+        errorDetails,
+      );
     });
   }
 
