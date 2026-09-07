@@ -86,6 +86,9 @@ importers:
       pg-mem:
         specifier: ^3.0.5
         version: 3.0.14(typeorm@0.3.31(pg@8.23.0))
+      socket.io-client:
+        specifier: ^4.8.1
+        version: 4.8.3
       supertest:
         specifier: ^7.0.0
         version: 7.2.2

@@ -19,7 +19,7 @@ import { AuthService } from "../auth/auth.service.js";
 import { ChargingSession, Order } from "../database/data-source.js";
 
 const REALTIME_TOKEN_TYPE = "charge-realtime";
-const REALTIME_TOKEN_TTL = "15m";
+const REALTIME_TOKEN_TTL = "4h";
 
 interface SubscribePayload {
   orderId?: unknown;

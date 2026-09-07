@@ -15,6 +15,9 @@ import { ChargingService } from "./charging.service.js";
 
 describe("ChargingController", () => {
   it("returns an estimated remaining time without claiming it controls the device timer", async () => {
+    const chargeGateway = {
+      authorizeSession: vi.fn().mockResolvedValue(undefined),
+    };
     const controller = new ChargingController(
       {
         getSession: async () => ({
@@ -24,10 +27,10 @@ describe("ChargingController", () => {
           timerAuthority: "DEVICE",
         }),
       } as unknown as ChargingService,
-      {} as ChargeGateway,
+      chargeGateway as unknown as ChargeGateway,
     );
 
-    const response = await controller.getSession("ses_1");
+    const response = await controller.getSession("ses_1", "Bearer access");
 
     expect(response).toMatchObject({
       id: "ses_1",
@@ -35,6 +38,10 @@ describe("ChargingController", () => {
       estimatedRemainingSeconds: 3450,
       timerAuthority: "DEVICE",
     });
+    expect(chargeGateway.authorizeSession).toHaveBeenCalledWith(
+      "ses_1",
+      "access",
+    );
   });
 
   it("uses only the persisted device observation for the remaining-time estimate", async () => {

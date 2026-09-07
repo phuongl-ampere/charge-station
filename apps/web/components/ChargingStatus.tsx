@@ -156,8 +156,9 @@ export function ChargingStatus({
   }
 
   async function refreshSession(id: string): Promise<void> {
+    if (!accessToken) return;
     try {
-      setSession(await api.getSession(id));
+      setSession(await api.getSession(id, accessToken));
       setError(null);
     } catch (cause) {
       setError(
@@ -174,7 +175,7 @@ export function ChargingStatus({
 
   useEffect(() => {
     if (sessionId) void refreshSession(sessionId);
-  }, [sessionId]);
+  }, [accessToken, sessionId]);
 
   useEffect(() => {
     if (suppliedSocket || !accessToken) return;

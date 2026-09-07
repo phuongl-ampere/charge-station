@@ -122,3 +122,43 @@ compact three-column time selector and inline QR/action layout.
 - Inspected screenshots:
   - `apps/web/test-results/checkout-selects-a-duratio-8845d-t-and-shows-payment-waiting-desktop/`
   - `apps/web/test-results/checkout-selects-a-duratio-8845d-t-and-shows-payment-waiting-mobile/`
+
+## Final Review Closure
+
+- The signed charge capability remains least-privilege scoped to its persisted
+  `orderId`, accepts only the matching order or that order's session, and now
+  has an explicit four-hour TTL. There is no refresh endpoint or
+  unauthenticated renewal path.
+- `GET /sessions/:id` and `POST /sessions/:id/stop` both require the same
+  Bearer capability. The web client waits for the hydrated capability before
+  requesting a session and attaches it to session reads and stop requests.
+- `charge-boundary.e2e-spec.ts` starts the real local Nest API with its actual
+  gateway, completes a signed local PayOS webhook, asserts the order projection
+  returns `sessionId`, verifies session access and the `202` stop response with
+  the issued capability, and confirms an unauthenticated session read is
+  rejected.
+- That integration uses `socket.io-client` against the local API gateway. It
+  receives acknowledgement of `order:{orderId}` and `session:{sessionId}`
+  subscriptions both before and after a real disconnect/reconnect, then
+  receives published order and session events through the rejoined rooms.
+- The existing frontend component test remains the UI mock boundary and now
+  verifies that a discovered session is not fetched until its token hydrates.
+
+## Final Verification
+
+- `pnpm install --frozen-lockfile`
+  - Passed.
+- `pnpm --filter @charge-station/api test`
+  - Passed: 14 files, 56 tests.
+- `pnpm --filter @charge-station/api test:e2e`
+  - Passed: 5 files, 14 tests, including the real HTTP/Socket.IO boundary.
+- `pnpm --filter @charge-station/api build && pnpm --filter @charge-station/api lint`
+  - Passed.
+- `pnpm --filter @charge-station/web test`
+  - Passed: 2 files, 4 tests.
+- `pnpm --filter @charge-station/web build && pnpm --filter @charge-station/web lint`
+  - Passed.
+- `pnpm --filter @charge-station/web playwright test`
+  - Passed: desktop and Pixel 5 projects, 2 tests.
+- `git diff --check`
+  - Passed.

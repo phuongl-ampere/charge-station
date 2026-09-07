@@ -88,7 +88,8 @@ describe("ChargingStatus", () => {
 
     const view = render(<ChargingStatus orderId="ord_1" api={api} />);
 
-    await waitFor(() => expect(api.getSession).toHaveBeenCalledWith("ses_1"));
+    await waitFor(() => expect(api.getOrder).toHaveBeenCalledWith("ord_1"));
+    expect(api.getSession).not.toHaveBeenCalled();
     expect(createChargeSocket).not.toHaveBeenCalled();
 
     view.rerender(
@@ -100,6 +101,12 @@ describe("ChargingStatus", () => {
     );
 
     await waitFor(() => expect(createChargeSocket).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(api.getSession).toHaveBeenCalledWith(
+        "ses_1",
+        "hydrated-order-token",
+      ),
+    );
     await act(async () => {
       listeners.get("connect")?.();
     });

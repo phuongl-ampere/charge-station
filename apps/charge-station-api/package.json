@@ -38,6 +38,7 @@
     "@types/node": "^22.10.2",
     "@types/supertest": "^6.0.2",
     "pg-mem": "^3.0.5",
+    "socket.io-client": "^4.8.1",
     "supertest": "^7.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",

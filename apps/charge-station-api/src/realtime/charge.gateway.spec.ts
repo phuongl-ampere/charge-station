@@ -1,3 +1,5 @@
+import { UnauthorizedException } from "@nestjs/common";
+import jwt from "jsonwebtoken";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DataSource } from "typeorm";
 
@@ -60,5 +62,47 @@ describe("ChargeGateway", () => {
       }),
     ).rejects.toThrow("Subscription token does not match order");
     expect(client.join).not.toHaveBeenCalled();
+  });
+
+  it("keeps an order capability valid through the three-hour charging window and expires it after four hours", async () => {
+    process.env.JWT_SECRET = "test-secret";
+    vi.useFakeTimers();
+    const issuedAt = new Date("2026-09-08T00:00:00.000Z");
+    vi.setSystemTime(issuedAt);
+    const gateway = new ChargeGateway(
+      {
+        getRepository: () => ({
+          findOneBy: vi.fn().mockResolvedValue({
+            id: "ses_1",
+            order: { id: "ord_1" },
+          }),
+        }),
+      } as unknown as DataSource,
+      {
+        verifyToken: vi.fn(() => {
+          throw new UnauthorizedException("Invalid token");
+        }),
+      } as unknown as AuthService,
+    );
+    const accessToken = gateway.issueAccessToken("ord_1");
+    const payload = jwt.decode(accessToken);
+
+    expect(payload).toMatchObject({
+      orderId: "ord_1",
+      type: "charge-realtime",
+    });
+    expect(
+      (payload as jwt.JwtPayload).exp! - (payload as jwt.JwtPayload).iat!,
+    ).toBe(4 * 60 * 60);
+
+    vi.setSystemTime(new Date(issuedAt.valueOf() + (4 * 60 * 60 - 1) * 1_000));
+    await expect(
+      gateway.authorizeSession("ses_1", accessToken),
+    ).resolves.toBeUndefined();
+
+    vi.setSystemTime(new Date(issuedAt.valueOf() + 4 * 60 * 60 * 1_000));
+    await expect(
+      gateway.authorizeSession("ses_1", accessToken),
+    ).rejects.toThrow("Invalid token");
   });
 });

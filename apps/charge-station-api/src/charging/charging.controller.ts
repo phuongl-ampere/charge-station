@@ -23,7 +23,14 @@ export class ChargingController {
   ) {}
 
   @Get("sessions/:id")
-  getSession(@Param("id") id: string): Promise<unknown> {
+  async getSession(
+    @Param("id") id: string,
+    @Headers("authorization") authorization: string | undefined,
+  ): Promise<unknown> {
+    await this.chargeGateway.authorizeSession(
+      id,
+      readBearerToken(authorization),
+    );
     return this.chargingService.getSession(id);
   }
 

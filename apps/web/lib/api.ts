@@ -55,7 +55,7 @@ export interface ChargeApi {
     durationMinutes: number;
   }): Promise<CheckoutOrder>;
   getOrder(orderId: string): Promise<OrderStatus>;
-  getSession(sessionId: string): Promise<SessionStatus>;
+  getSession(sessionId: string, accessToken: string): Promise<SessionStatus>;
   stopSession(
     sessionId: string,
     accessToken: string,
@@ -131,10 +131,11 @@ export function createChargeApi(origin = localApiOrigin): ChargeApi {
     },
     getOrder: (orderId) =>
       request<OrderStatus>(local, `/orders/${encodeURIComponent(orderId)}`),
-    getSession: (sessionId) =>
+    getSession: (sessionId, accessToken) =>
       request<SessionStatus>(
         local,
         `/sessions/${encodeURIComponent(sessionId)}`,
+        { headers: { authorization: `Bearer ${accessToken}` } },
       ),
     stopSession: (sessionId, accessToken) =>
       request<{ accepted: true }>(
