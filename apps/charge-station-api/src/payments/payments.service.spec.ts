@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID } from "node:crypto";
 
-import { describe, expect, it, vi } from 'vitest';
-import type { DataSource } from 'typeorm';
+import { describe, expect, it, vi } from "vitest";
+import type { DataSource } from "typeorm";
 
 import {
   ChargingSession,
@@ -11,23 +11,24 @@ import {
   OrderStatus,
   PaymentTransaction,
   PaymentTransactionStatus,
-} from '../database/data-source.js';
-import type { PayosClient } from './payos.client.js';
-import type { PayosWebhook } from './payos.client.js';
-import { PaymentsService } from './payments.service.js';
+} from "../database/data-source.js";
+import type { CommandDispatcherService } from "../iot/command-dispatcher.service.js";
+import type { PayosClient } from "./payos.client.js";
+import type { PayosWebhook } from "./payos.client.js";
+import { PaymentsService } from "./payments.service.js";
 
-describe('PaymentsService webhook processing', () => {
-  it('marks the order paid and creates exactly one start command for a valid webhook', async () => {
+describe("PaymentsService webhook processing", () => {
+  it("marks the order paid and creates exactly one start command for a valid webhook", async () => {
     const pendingOrder = {
       id: randomUUID(),
-      payosOrderCode: '100001',
+      payosOrderCode: "100001",
       amountVnd: 10000,
       durationMinutes: 120,
       status: OrderStatus.PENDING_PAYMENT,
       connector: {
         id: randomUUID(),
-        code: 'ST01-C01',
-        station: { deviceId: 'dev_ST01' },
+        code: "ST01-C01",
+        station: { deviceId: "dev_ST01" },
       },
     } as Order;
     const payment = {
@@ -56,11 +57,11 @@ describe('PaymentsService webhook processing', () => {
     };
     const manager = {
       query: vi.fn().mockImplementation(async (query: string) => {
-        if (query.includes('FROM payment_transactions'))
+        if (query.includes("FROM payment_transactions"))
           return [{ id: payment.id }];
-        if (query.includes('FROM connectors'))
+        if (query.includes("FROM connectors"))
           return [{ id: pendingOrder.connector.id }];
-        throw new Error('Unexpected lock query');
+        throw new Error("Unexpected lock query");
       }),
       getRepository: vi.fn((entity) => {
         if (entity === PaymentTransaction) return paymentRepository;
@@ -68,28 +69,39 @@ describe('PaymentsService webhook processing', () => {
         if (entity === Connector) return connectorRepository;
         if (entity === ChargingSession) return sessionRepository;
         if (entity === DeviceCommand) return commandRepository;
-        throw new Error('Unexpected repository');
+        throw new Error("Unexpected repository");
       }),
     };
+    let transactionCommitted = false;
     const dataSource = {
-      transaction: vi.fn(async (callback) => callback(manager)),
+      transaction: vi.fn(async (callback) => {
+        const result = await callback(manager);
+        transactionCommitted = true;
+        return result;
+      }),
     };
     const client = {
       verifyWebhook: vi.fn().mockReturnValue(true),
     };
+    const commandDispatcher = {
+      dispatch: vi.fn(async () => {
+        expect(transactionCommitted).toBe(true);
+      }),
+    };
     const service = new PaymentsService(
       dataSource as unknown as DataSource,
       client as unknown as PayosClient,
+      commandDispatcher as unknown as CommandDispatcherService,
     );
     const body: PayosWebhook = {
-      code: '00',
+      code: "00",
       success: true,
-      signature: 'valid',
+      signature: "valid",
       data: {
         orderCode: 100001,
         amount: 10000,
-        paymentLinkId: 'pl_123',
-        status: 'PAID',
+        paymentLinkId: "pl_123",
+        status: "PAID",
       },
     };
 
@@ -97,11 +109,11 @@ describe('PaymentsService webhook processing', () => {
     await service.handleWebhook(body);
 
     expect(manager.query).toHaveBeenCalledWith(
-      expect.stringContaining('FROM payment_transactions'),
-      ['100001'],
+      expect.stringContaining("FROM payment_transactions"),
+      ["100001"],
     );
     expect(manager.query).toHaveBeenCalledWith(
-      expect.stringContaining('FROM connectors'),
+      expect.stringContaining("FROM connectors"),
       [pendingOrder.connector.id],
     );
     expect(orderRepository.save).toHaveBeenCalledTimes(1);
@@ -110,13 +122,16 @@ describe('PaymentsService webhook processing', () => {
     expect(commandRepository.save).toHaveBeenCalledTimes(1);
     expect(pendingOrder.status).toBe(OrderStatus.PAID);
     expect(payment.status).toBe(PaymentTransactionStatus.PAID);
-    expect(payment.paymentLinkId).toBe('pl_123');
+    expect(payment.paymentLinkId).toBe("pl_123");
     expect(commandRepository.create).toHaveBeenCalledWith(
-      expect.objectContaining({ commandType: 'START_CHARGING' }),
+      expect.objectContaining({ commandType: "START_CHARGING" }),
+    );
+    expect(commandDispatcher.dispatch).toHaveBeenCalledWith(
+      commandRepository.create.mock.results[0]?.value.commandId,
     );
   });
 
-  it('does not open a database transaction for an invalid signature', async () => {
+  it("does not open a database transaction for an invalid signature", async () => {
     const dataSource = { transaction: vi.fn() };
     const client = { verifyWebhook: vi.fn().mockReturnValue(false) };
     const service = new PaymentsService(
@@ -126,12 +141,12 @@ describe('PaymentsService webhook processing', () => {
 
     await expect(
       service.handleWebhook({
-        code: '00',
+        code: "00",
         success: true,
-        signature: 'invalid',
+        signature: "invalid",
         data: { orderCode: 100001, amount: 10000 },
       }),
-    ).rejects.toThrow('Invalid PayOS webhook signature');
+    ).rejects.toThrow("Invalid PayOS webhook signature");
 
     expect(dataSource.transaction).not.toHaveBeenCalled();
   });

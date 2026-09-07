@@ -1,13 +1,14 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID } from "node:crypto";
 
 import {
   BadRequestException,
   Inject,
   Injectable,
   NotFoundException,
-} from '@nestjs/common';
-import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, EntityManager } from 'typeorm';
+  Optional,
+} from "@nestjs/common";
+import { InjectDataSource } from "@nestjs/typeorm";
+import { DataSource, EntityManager } from "typeorm";
 
 import {
   ChargingSession,
@@ -20,23 +21,27 @@ import {
   OrderStatus,
   PaymentTransaction,
   PaymentTransactionStatus,
-} from '../database/data-source.js';
-import { PayosClient } from './payos.client.js';
-import type { CreateOrderDto } from './dto/create-order.dto.js';
-import { parsePayosWebhook } from './payos-webhook.js';
+} from "../database/data-source.js";
+import { CommandDispatcherService } from "../iot/command-dispatcher.service.js";
+import { PayosClient } from "./payos.client.js";
+import type { CreateOrderDto } from "./dto/create-order.dto.js";
+import { parsePayosWebhook } from "./payos-webhook.js";
 
 @Injectable()
 export class PaymentsService {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     @Inject(PayosClient) private readonly payosClient: PayosClient,
+    @Optional()
+    @Inject(CommandDispatcherService)
+    private readonly commandDispatcher?: CommandDispatcherService,
   ) {}
 
   async createOrder(input: CreateOrderDto): Promise<{
     orderId: string;
     amount: number;
     currency: string;
-    payment: { provider: 'PAYOS'; checkoutUrl: string };
+    payment: { provider: "PAYOS"; checkoutUrl: string };
   }> {
     if (
       !Number.isInteger(input.durationMinutes) ||
@@ -44,7 +49,7 @@ export class PaymentsService {
       input.durationMinutes % 60
     ) {
       throw new BadRequestException(
-        'Charging duration must be a positive whole number of hours',
+        "Charging duration must be a positive whole number of hours",
       );
     }
 
@@ -64,10 +69,10 @@ export class PaymentsService {
         : null;
 
       if (!connector) {
-        throw new NotFoundException('Connector not found');
+        throw new NotFoundException("Connector not found");
       }
       if (connector.status !== ConnectorStatus.AVAILABLE) {
-        throw new BadRequestException('Connector is not available');
+        throw new BadRequestException("Connector is not available");
       }
       if (
         !connector.pricingPlan?.allowedDurationsMinutes.includes(
@@ -75,7 +80,7 @@ export class PaymentsService {
         )
       ) {
         throw new BadRequestException(
-          'Charging duration is not available for this connector',
+          "Charging duration is not available for this connector",
         );
       }
 
@@ -84,7 +89,7 @@ export class PaymentsService {
       );
       if (!Number.isSafeInteger(amount) || amount <= 0) {
         throw new BadRequestException(
-          'Charging amount must be a positive whole VND amount',
+          "Charging amount must be a positive whole VND amount",
         );
       }
 
@@ -96,7 +101,7 @@ export class PaymentsService {
           id: randomUUID(),
           durationMinutes: input.durationMinutes,
           amountVnd: amount,
-          currency: 'VND',
+          currency: "VND",
           status: OrderStatus.PENDING_PAYMENT,
           user: null,
           connector,
@@ -107,7 +112,7 @@ export class PaymentsService {
         paymentRepository.create({
           id: randomUUID(),
           order,
-          provider: 'PAYOS',
+          provider: "PAYOS",
           paymentLinkId: null,
           checkoutUrl: null,
           status: PaymentTransactionStatus.PENDING,
@@ -136,7 +141,7 @@ export class PaymentsService {
         amount,
         currency: order.currency,
         payment: {
-          provider: 'PAYOS',
+          provider: "PAYOS",
           checkoutUrl: paymentLink.checkoutUrl,
         },
       };
@@ -146,13 +151,13 @@ export class PaymentsService {
   async handleWebhook(body: unknown): Promise<{ success: true }> {
     const webhook = parsePayosWebhook(body);
     if (!this.payosClient.verifyWebhook(webhook.data, webhook.signature)) {
-      throw new BadRequestException('Invalid PayOS webhook signature');
+      throw new BadRequestException("Invalid PayOS webhook signature");
     }
 
     const orderCode = parsePositiveOrderCode(webhook.data.orderCode);
     const amount = parsePositiveAmount(webhook.data.amount);
 
-    return this.dataSource.transaction(async (manager) => {
+    const result = await this.dataSource.transaction(async (manager) => {
       const paymentRepository = manager.getRepository(PaymentTransaction);
       const orderRepository = manager.getRepository(Order);
       const connectorRepository = manager.getRepository(Connector);
@@ -167,14 +172,14 @@ export class PaymentsService {
         : null;
 
       if (!payment) {
-        throw new NotFoundException('PayOS order not found');
+        throw new NotFoundException("PayOS order not found");
       }
       if (payment.status !== PaymentTransactionStatus.PENDING) {
         return { success: true };
       }
       if (amount !== payment.order.amountVnd) {
         throw new BadRequestException(
-          'PayOS payment amount does not match the order',
+          "PayOS payment amount does not match the order",
         );
       }
       const connectorId = await lockConnectorIdById(
@@ -185,18 +190,18 @@ export class PaymentsService {
         ? await connectorRepository.findOne({ where: { id: connectorId } })
         : null;
       if (!connector) {
-        throw new NotFoundException('Connector not found');
+        throw new NotFoundException("Connector not found");
       }
 
       payment.rawWebhookPayload = webhook as unknown as Record<string, unknown>;
       payment.signatureValid = true;
       payment.paymentLinkId =
-        typeof webhook.data.paymentLinkId === 'string'
+        typeof webhook.data.paymentLinkId === "string"
           ? webhook.data.paymentLinkId
           : payment.paymentLinkId;
 
-      if (webhook.code !== '00' || webhook.success !== true) {
-        const expired = webhook.data.status === 'EXPIRED';
+      if (webhook.code !== "00" || webhook.success !== true) {
+        const expired = webhook.data.status === "EXPIRED";
         payment.status = expired
           ? PaymentTransactionStatus.EXPIRED
           : PaymentTransactionStatus.FAILED;
@@ -233,11 +238,15 @@ export class PaymentsService {
         id: randomUUID(),
         commandId: randomUUID(),
         session: savedSession,
-        commandType: 'START_CHARGING',
+        commandType: "START_CHARGING",
         payload: {
+          stationCode: payment.order.connector.station.code,
           connectorCode: connector.code,
           deviceId: payment.order.connector.station.deviceId,
           sessionId: savedSession.id,
+          durationSeconds: payment.order.durationMinutes * 60,
+          expiresAt: savedSession.expectedEndAt!.toISOString(),
+          configVersion: 1,
         },
         retryCount: 0,
         status: DeviceCommandStatus.PENDING,
@@ -245,8 +254,12 @@ export class PaymentsService {
       });
       await commandRepository.save(command);
 
-      return { success: true };
+      return { success: true, commandId: command.commandId };
     });
+    if (result.commandId) {
+      await this.commandDispatcher?.dispatch(result.commandId);
+    }
+    return { success: true };
   }
 
   async getMockCheckout(orderCodeValue: unknown): Promise<{
@@ -270,13 +283,13 @@ export class PaymentsService {
   async completeMockCheckout(
     orderCodeValue: unknown,
   ): Promise<{ success: true }> {
-    return this.handleMockCheckout(orderCodeValue, 'PAID');
+    return this.handleMockCheckout(orderCodeValue, "PAID");
   }
 
   async cancelMockCheckout(
     orderCodeValue: unknown,
   ): Promise<{ success: true }> {
-    return this.handleMockCheckout(orderCodeValue, 'CANCELLED');
+    return this.handleMockCheckout(orderCodeValue, "CANCELLED");
   }
 
   async getCallbackRedirect(
@@ -284,7 +297,7 @@ export class PaymentsService {
     signature: string,
   ): Promise<string> {
     if (!this.payosClient.verifyWebhook(data, signature)) {
-      throw new BadRequestException('Invalid PayOS callback signature');
+      throw new BadRequestException("Invalid PayOS callback signature");
     }
 
     const orderCode = parsePositiveOrderCode(data.orderCode);
@@ -292,15 +305,15 @@ export class PaymentsService {
       payosOrderCode: String(orderCode),
     });
     if (!order) {
-      throw new NotFoundException('PayOS order not found');
+      throw new NotFoundException("PayOS order not found");
     }
 
-    return `${(process.env.FRONTEND_URL ?? 'http://localhost:5173').replace(/\/$/, '')}/charge/${order.id}`;
+    return `${(process.env.FRONTEND_URL ?? "http://localhost:5173").replace(/\/$/, "")}/charge/${order.id}`;
   }
 
   private async handleMockCheckout(
     orderCodeValue: unknown,
-    status: 'PAID' | 'CANCELLED',
+    status: "PAID" | "CANCELLED",
   ): Promise<{ success: true }> {
     this.assertMockMode();
     const orderCode = parsePositiveOrderCode(orderCodeValue);
@@ -313,8 +326,8 @@ export class PaymentsService {
     };
 
     return this.handleWebhook({
-      code: status === 'PAID' ? '00' : '01',
-      success: status === 'PAID',
+      code: status === "PAID" ? "00" : "01",
+      success: status === "PAID",
       data,
       signature: this.payosClient.signWebhook(data),
     });
@@ -330,14 +343,14 @@ export class PaymentsService {
         relations: { order: true },
       });
     if (!payment) {
-      throw new NotFoundException('PayOS order not found');
+      throw new NotFoundException("PayOS order not found");
     }
     return payment;
   }
 
   private assertMockMode(): void {
     if (!this.payosClient.isMock) {
-      throw new BadRequestException('Mock PayOS checkout is disabled');
+      throw new BadRequestException("Mock PayOS checkout is disabled");
     }
   }
 }
@@ -347,7 +360,7 @@ async function lockConnectorIdByCode(
   code: string,
 ): Promise<string | null> {
   const rows = await manager.query(
-    'SELECT id FROM connectors WHERE code = $1 FOR UPDATE',
+    "SELECT id FROM connectors WHERE code = $1 FOR UPDATE",
     [code],
   );
   return rows[0]?.id ?? null;
@@ -358,7 +371,7 @@ async function lockConnectorIdById(
   id: string,
 ): Promise<string | null> {
   const rows = await manager.query(
-    'SELECT id FROM connectors WHERE id = $1 FOR UPDATE',
+    "SELECT id FROM connectors WHERE id = $1 FOR UPDATE",
     [id],
   );
   return rows[0]?.id ?? null;
@@ -370,28 +383,28 @@ async function lockPaymentIdByOrderCode(
 ): Promise<string | null> {
   const rows = await manager.query(
     [
-      'SELECT payment_transactions.id',
-      'FROM payment_transactions',
-      'INNER JOIN orders ON orders.id = payment_transactions.order_id',
-      'WHERE orders.payos_order_code = $1',
-      'FOR UPDATE',
-    ].join(' '),
+      "SELECT payment_transactions.id",
+      "FROM payment_transactions",
+      "INNER JOIN orders ON orders.id = payment_transactions.order_id",
+      "WHERE orders.payos_order_code = $1",
+      "FOR UPDATE",
+    ].join(" "),
     [String(orderCode)],
   );
   return rows[0]?.id ?? null;
 }
 
 function parsePositiveOrderCode(value: unknown): number {
-  const orderCode = typeof value === 'number' ? value : Number(value);
+  const orderCode = typeof value === "number" ? value : Number(value);
   if (!Number.isSafeInteger(orderCode) || orderCode <= 0) {
-    throw new BadRequestException('PayOS order code must be a positive number');
+    throw new BadRequestException("PayOS order code must be a positive number");
   }
   return orderCode;
 }
 
 function parsePositiveAmount(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-    throw new BadRequestException('PayOS amount must be a positive number');
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new BadRequestException("PayOS amount must be a positive number");
   }
   return Math.round(value);
 }
@@ -400,12 +413,12 @@ function buildPaymentDescription(
   connectorCode: string,
   durationMinutes: number,
 ): string {
-  const connector = connectorCode.replace(/[^A-Za-z0-9]/g, '').slice(0, 12);
+  const connector = connectorCode.replace(/[^A-Za-z0-9]/g, "").slice(0, 12);
   const description = `Charge ${connector} ${durationMinutes / 60}h`;
   if (description.length > 25) {
     throw new BadRequestException(
-      'PayOS description exceeds 25 ASCII characters',
+      "PayOS description exceeds 25 ASCII characters",
     );
   }
-  return description.padEnd(25, ' ');
+  return description.padEnd(25, " ");
 }

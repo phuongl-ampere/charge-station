@@ -1,0 +1,95 @@
+import { Injectable } from "@nestjs/common";
+
+import type { StartChargingCommand } from "@charge-station/contracts";
+
+@Injectable()
+export class IotServiceClient {
+  async start(command: StartChargingCommand): Promise<void> {
+    const serviceToken = process.env.SERVICE_TOKEN;
+    if (!serviceToken) {
+      throw new Error("SERVICE_TOKEN must be configured");
+    }
+
+    const response = await fetch(this.commandEndpoint(), {
+      method: "POST",
+      redirect: "error",
+      headers: {
+        "content-type": "application/json",
+        "x-service-token": serviceToken,
+      },
+      body: JSON.stringify(command),
+    });
+
+    if (!response.ok) {
+      if (response.status >= 500) {
+        throw new IotTransportError(
+          `IoT Service command request failed: ${response.status}`,
+        );
+      }
+      throw new IotCommandRejectedError(
+        `IoT Service rejected command: ${response.status}`,
+      );
+    }
+
+    const body: unknown = await response.json();
+    if (
+      !isAcceptedCommandResponse(body) ||
+      body.commandId !== command.commandId
+    ) {
+      throw new IotCommandRejectedError("IoT Service rejected command");
+    }
+  }
+
+  private commandEndpoint(): string {
+    const configuredUrl = process.env.IOT_SERVICE_URL;
+    if (!configuredUrl) {
+      throw new Error("IOT_SERVICE_URL must be configured");
+    }
+
+    let baseUrl: URL;
+    try {
+      baseUrl = new URL(configuredUrl);
+    } catch {
+      throw new Error("IOT_SERVICE_URL must use a local service destination");
+    }
+
+    const hostname = baseUrl.hostname.toLowerCase();
+    const localHostnames = new Set([
+      "localhost",
+      "127.0.0.1",
+      "::1",
+      "[::1]",
+      "iot-service",
+    ]);
+    if (
+      !localHostnames.has(hostname) ||
+      !["http:", "https:"].includes(baseUrl.protocol) ||
+      baseUrl.username ||
+      baseUrl.password
+    ) {
+      throw new Error("IOT_SERVICE_URL must use a local service destination");
+    }
+
+    baseUrl.pathname = `${baseUrl.pathname.replace(/\/+$/, "")}/internal/commands/start`;
+    baseUrl.search = "";
+    baseUrl.hash = "";
+    return baseUrl.toString();
+  }
+}
+
+export class IotTransportError extends Error {}
+
+export class IotCommandRejectedError extends Error {}
+
+function isAcceptedCommandResponse(
+  body: unknown,
+): body is { commandId: string; accepted: true } {
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    "commandId" in body &&
+    typeof body.commandId === "string" &&
+    "accepted" in body &&
+    body.accepted === true
+  );
+}
