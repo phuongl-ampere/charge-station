@@ -452,6 +452,48 @@ describe("ChargingController", () => {
     expect(commandRepository.create).toHaveBeenCalledTimes(1);
   });
 
+  it("retries a failed stop from STOPPING with its original reason", async () => {
+    const { commandRepository, session, service } = createStopHarness(
+      vi.fn().mockResolvedValue(undefined),
+      ChargingSessionStatus.STOPPING,
+    );
+    const failedStop = {
+      commandId: "failed-stop-command",
+      status: DeviceCommandStatus.FAILED,
+      payload: {
+        sessionId: session.id,
+        reason: "SYSTEM_REQUESTED",
+      },
+    } as DeviceCommand;
+    commandRepository.findOne.mockImplementation(async ({ where }) => {
+      return where.status === DeviceCommandStatus.FAILED ? failedStop : null;
+    });
+
+    await expect(service.stopSession(session.id)).resolves.toEqual({
+      accepted: true,
+    });
+
+    expect(commandRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandType: "STOP_CHARGING",
+        payload: {
+          sessionId: session.id,
+          reason: "SYSTEM_REQUESTED",
+        },
+        status: DeviceCommandStatus.PENDING,
+      }),
+    );
+    expect(failedStop).toMatchObject({
+      commandId: "failed-stop-command",
+      status: DeviceCommandStatus.FAILED,
+      payload: {
+        sessionId: session.id,
+        reason: "SYSTEM_REQUESTED",
+      },
+    });
+    expect(session.status).toBe(ChargingSessionStatus.STOPPING);
+  });
+
   it("returns accepted before a slow dispatcher completes", async () => {
     const { commandRepository, service } = createStopHarness(
       () => new Promise<void>(() => undefined),

@@ -23,11 +23,21 @@ import {
   PaymentTransaction,
   PaymentTransactionStatus,
 } from "../database/data-source.js";
+import type { PaymentLink } from "@charge-station/contracts";
 import { CommandDispatcherService } from "../iot/command-dispatcher.service.js";
 import { ChargeGateway } from "../realtime/charge.gateway.js";
 import { PayosClient } from "./payos.client.js";
 import type { CreateOrderDto } from "./dto/create-order.dto.js";
 import { parsePayosWebhook } from "./payos-webhook.js";
+
+interface PaymentLinkReservation {
+  paymentId: string;
+  orderId: string;
+  orderCode: number;
+  amount: number;
+  currency: string;
+  description: string;
+}
 
 @Injectable()
 export class PaymentsService {
@@ -61,7 +71,75 @@ export class PaymentsService {
       );
     }
 
-    const result = await this.dataSource.transaction(async (manager) => {
+    const reservation = await this.reservePaymentLink(input);
+    const paymentLink = await this.payosClient.createPaymentLink({
+      amount: reservation.amount,
+      orderCode: reservation.orderCode,
+      description: reservation.description,
+      returnUrl: this.payosClient.returnUrl,
+      cancelUrl: this.payosClient.cancelUrl,
+    });
+    try {
+      await this.persistPaymentLink(reservation.paymentId, paymentLink);
+    } catch (error: unknown) {
+      const details =
+        error instanceof Error ? (error.stack ?? error.message) : String(error);
+      this.logger.error(
+        "Failed to persist PayOS payment link; recovery is required",
+        details,
+      );
+    }
+
+    const result = {
+      orderId: reservation.orderId,
+      amount: reservation.amount,
+      currency: reservation.currency,
+      payment: {
+        provider: "PAYOS" as const,
+        checkoutUrl: paymentLink.checkoutUrl,
+      },
+    };
+    return this.gateway
+      ? {
+          ...result,
+          realtimeAccessToken: this.gateway.issueAccessToken(result.orderId),
+        }
+      : result;
+  }
+
+  async getPaymentLink(
+    orderId: string,
+  ): Promise<{ provider: "PAYOS"; checkoutUrl: string }> {
+    const payment = await this.dataSource
+      .getRepository(PaymentTransaction)
+      .findOne({
+        where: { order: { id: orderId } },
+        relations: { order: true },
+      });
+    if (!payment) {
+      throw new NotFoundException("Payment not found");
+    }
+    if (payment.checkoutUrl) {
+      return {
+        provider: "PAYOS",
+        checkoutUrl: payment.checkoutUrl,
+      };
+    }
+
+    const paymentLink = await this.payosClient.getPaymentLinkInfo(
+      parsePositiveOrderCode(payment.order.payosOrderCode),
+    );
+    await this.persistPaymentLink(payment.id, paymentLink);
+    return {
+      provider: "PAYOS",
+      checkoutUrl: paymentLink.checkoutUrl,
+    };
+  }
+
+  private async reservePaymentLink(
+    input: CreateOrderDto,
+  ): Promise<PaymentLinkReservation> {
+    return this.dataSource.transaction(async (manager) => {
       const connectorRepository = manager.getRepository(Connector);
       const orderRepository = manager.getRepository(Order);
       const paymentRepository = manager.getRepository(PaymentTransaction);
@@ -115,7 +193,6 @@ export class PaymentsService {
           connector,
         }),
       );
-      const orderCode = parsePositiveOrderCode(order.payosOrderCode);
       const payment = await paymentRepository.save(
         paymentRepository.create({
           id: randomUUID(),
@@ -128,38 +205,44 @@ export class PaymentsService {
           signatureValid: false,
         }),
       );
-      const description = buildPaymentDescription(
-        connector.code,
-        input.durationMinutes,
-      );
-      const paymentLink = await this.payosClient.createPaymentLink({
-        amount,
+      const orderCode = parsePositiveOrderCode(order.payosOrderCode);
+
+      return {
+        paymentId: payment.id,
+        orderId: order.id,
         orderCode,
-        description,
-        returnUrl: this.payosClient.returnUrl,
-        cancelUrl: this.payosClient.cancelUrl,
-      });
+        amount,
+        currency: order.currency,
+        description: buildPaymentDescription(
+          connector.code,
+          input.durationMinutes,
+        ),
+      };
+    });
+  }
+
+  private async persistPaymentLink(
+    paymentId: string,
+    paymentLink: PaymentLink,
+  ): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const lockedPaymentId = await lockPaymentIdById(manager, paymentId);
+      const payment = lockedPaymentId
+        ? await manager
+            .getRepository(PaymentTransaction)
+            .findOneBy({ id: lockedPaymentId })
+        : null;
+      if (!payment) {
+        throw new NotFoundException("Payment not found");
+      }
+      if (payment.checkoutUrl) {
+        return;
+      }
 
       payment.paymentLinkId = paymentLink.paymentLinkId;
       payment.checkoutUrl = paymentLink.checkoutUrl;
-      await paymentRepository.save(payment);
-
-      return {
-        orderId: order.id,
-        amount,
-        currency: order.currency,
-        payment: {
-          provider: "PAYOS" as const,
-          checkoutUrl: paymentLink.checkoutUrl,
-        },
-      };
+      await manager.getRepository(PaymentTransaction).save(payment);
     });
-    return this.gateway
-      ? {
-          ...result,
-          realtimeAccessToken: this.gateway.issueAccessToken(result.orderId),
-        }
-      : result;
   }
 
   async handleWebhook(body: unknown): Promise<{ success: true }> {
@@ -451,6 +534,17 @@ async function lockPaymentIdByOrderCode(
       "FOR UPDATE",
     ].join(" "),
     [String(orderCode)],
+  );
+  return rows[0]?.id ?? null;
+}
+
+async function lockPaymentIdById(
+  manager: EntityManager,
+  paymentId: string,
+): Promise<string | null> {
+  const rows = await manager.query(
+    "SELECT id FROM payment_transactions WHERE id = $1 FOR UPDATE",
+    [paymentId],
   );
   return rows[0]?.id ?? null;
 }

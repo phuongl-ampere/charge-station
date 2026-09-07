@@ -10,6 +10,7 @@ import {
   type CommandResponse,
   DeviceStateService,
   type DeviceRuntimeState,
+  type PendingTerminalDelivery,
 } from "../devices/device-state.service.js";
 import { ChargeStationEventClient } from "../events/charge-station-event.client.js";
 
@@ -20,6 +21,13 @@ type StopReason =
   | "TIMEOUT"
   | "COMMAND_FAILED"
   | "DEVICE_OFFLINE";
+
+const TERMINAL_EVENT_TYPES = new Set<DeviceEvent["type"]>([
+  "DEVICE_OFFLINE",
+  "COMMAND_FAILED",
+  "STOPPED",
+]);
+const TERMINAL_RETRY_DELAYS_MS = [100, 500, 1_000] as const;
 
 @Injectable()
 export class CommandsService {
@@ -34,6 +42,15 @@ export class CommandsService {
   ) {}
 
   async start(command: StartChargingCommand): Promise<CommandResponse> {
+    if (!hasUnexpiredStartExpiry(command.expiresAt)) {
+      return {
+        commandId: command.commandId,
+        accepted: false,
+        deviceId: this.deviceIdFor(command),
+        status: "REJECTED",
+      };
+    }
+
     const duplicate = this.deviceState.getCommand(command.commandId);
     if (duplicate) {
       return this.acceptedResponse(duplicate);
@@ -196,22 +213,72 @@ export class CommandsService {
       payload,
     };
 
-    const previousDelivery =
-      this.eventQueues.get(event.sessionId) ?? Promise.resolve();
-    const delivery = previousDelivery.then(async () => {
+    if (TERMINAL_EVENT_TYPES.has(type)) {
+      const delivery = this.deviceState.createTerminalDelivery(state, event);
+      this.enqueueEvent(event.sessionId, () =>
+        this.deliverTerminalEvent(state, delivery),
+      );
+      return;
+    }
+
+    this.enqueueEvent(event.sessionId, async () => {
       try {
         await this.eventClient.post(event);
       } catch (error: unknown) {
         this.logEventDeliveryFailure(event, error);
       }
     });
+  }
 
-    this.eventQueues.set(event.sessionId, delivery);
-    void delivery.then(() => {
-      if (this.eventQueues.get(event.sessionId) === delivery) {
-        this.eventQueues.delete(event.sessionId);
+  private enqueueEvent(sessionId: string, deliver: () => Promise<void>): void {
+    const previousDelivery =
+      this.eventQueues.get(sessionId) ?? Promise.resolve();
+    const delivery = previousDelivery.then(deliver);
+
+    this.eventQueues.set(sessionId, delivery);
+    void delivery.then(
+      () => {
+        if (this.eventQueues.get(sessionId) === delivery) {
+          this.eventQueues.delete(sessionId);
+        }
+      },
+      () => {
+        if (this.eventQueues.get(sessionId) === delivery) {
+          this.eventQueues.delete(sessionId);
+        }
+      },
+    );
+  }
+
+  private async deliverTerminalEvent(
+    state: DeviceRuntimeState,
+    delivery: PendingTerminalDelivery,
+  ): Promise<void> {
+    while (
+      this.deviceState.getTerminalDelivery(state, delivery.event.eventId) ===
+      delivery
+    ) {
+      try {
+        await this.eventClient.post(delivery.event);
+        this.deviceState.acknowledgeTerminalDelivery(
+          state,
+          delivery.event.eventId,
+        );
+        return;
+      } catch (error: unknown) {
+        this.logEventDeliveryFailure(delivery.event, error);
+        await this.deviceState.waitForTerminalRetry(
+          delivery,
+          this.terminalRetryDelay(delivery.retryCount),
+        );
       }
-    });
+    }
+  }
+
+  private terminalRetryDelay(retryCount: number): number {
+    return TERMINAL_RETRY_DELAYS_MS[
+      Math.min(retryCount, TERMINAL_RETRY_DELAYS_MS.length - 1)
+    ];
   }
 
   private logEventDeliveryFailure(event: DeviceEvent, error: unknown): void {
@@ -255,4 +322,17 @@ export class CommandsService {
     const value = Number(process.env[name]);
     return Number.isFinite(value) && value > 0 ? value : fallback;
   }
+}
+
+function hasUnexpiredStartExpiry(expiresAt: unknown): boolean {
+  if (typeof expiresAt !== "string") {
+    return false;
+  }
+
+  const expiry = new Date(expiresAt);
+  return (
+    !Number.isNaN(expiry.valueOf()) &&
+    expiry.toISOString() === expiresAt &&
+    expiry.valueOf() > Date.now()
+  );
 }

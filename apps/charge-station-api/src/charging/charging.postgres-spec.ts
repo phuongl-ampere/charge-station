@@ -139,19 +139,16 @@ describe("Charging reliability with local PostgreSQL", () => {
       ConnectorStatus.OCCUPIED,
       DeviceCommandStatus.PENDING,
     );
-    const dispatcher = new ImmediateCommandDispatcherService(
-      dataSource,
-      {
-        start: vi
-          .fn()
-          .mockRejectedValue(new IotTransportError("connection refused")),
-        stop: vi.fn(),
-      } as unknown as IotServiceClient,
-    );
+    const dispatcher = new ImmediateCommandDispatcherService(dataSource, {
+      start: vi
+        .fn()
+        .mockRejectedValue(new IotTransportError("connection refused")),
+      stop: vi.fn(),
+    } as unknown as IotServiceClient);
 
-    await expect(dispatcher.dispatch(fixture.command.commandId)).rejects.toThrow(
-      "connection refused",
-    );
+    await expect(
+      dispatcher.dispatch(fixture.command.commandId),
+    ).rejects.toThrow("connection refused");
 
     const session = await dataSource
       .getRepository(ChargingSession)
@@ -165,10 +162,7 @@ describe("Charging reliability with local PostgreSQL", () => {
     });
     expect(connector.status).toBe(ConnectorStatus.OCCUPIED);
 
-    const paymentsService = new PaymentsService(
-      dataSource,
-      {} as PayosClient,
-    );
+    const paymentsService = new PaymentsService(dataSource, {} as PayosClient);
     await expect(
       paymentsService.createOrder({
         connectorCode: fixture.connector.code,
@@ -256,6 +250,91 @@ describe("Charging reliability with local PostgreSQL", () => {
         payload: {
           sessionId: session.id,
           reason: "USER_REQUESTED",
+        },
+        retryCount: 0,
+        nextAttemptAt: null,
+        status: DeviceCommandStatus.PENDING,
+        acknowledgedAt: null,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("retries a failed STOPPING command while retaining its history and reason", async () => {
+    const fixture = await createFixture(
+      ChargingSessionStatus.STOPPING,
+      ConnectorStatus.OCCUPIED,
+      DeviceCommandStatus.SENT,
+    );
+    const failedStop = await dataSource.getRepository(DeviceCommand).save({
+      id: randomUUID(),
+      commandId: randomUUID(),
+      session: fixture.session,
+      commandType: "STOP_CHARGING",
+      payload: {
+        sessionId: fixture.session.id,
+        reason: "SYSTEM_REQUESTED",
+      },
+      retryCount: 1,
+      nextAttemptAt: null,
+      status: DeviceCommandStatus.FAILED,
+      acknowledgedAt: null,
+    });
+    const dispatcher = { dispatch: vi.fn().mockResolvedValue(undefined) };
+    const service = new ChargingService(
+      dataSource,
+      dispatcher as unknown as CommandDispatcherService,
+    );
+
+    await expect(service.stopSession(fixture.session.id)).resolves.toEqual({
+      accepted: true,
+    });
+
+    const commands = await dataSource.getRepository(DeviceCommand).find({
+      where: { session: { id: fixture.session.id } },
+      order: { createdAt: "ASC" },
+    });
+    const session = await dataSource
+      .getRepository(ChargingSession)
+      .findOneByOrFail({ id: fixture.session.id });
+    const stopCommands = commands.filter(
+      (command) => command.commandType === "STOP_CHARGING",
+    );
+    const retriedStop = stopCommands.find(
+      (command) =>
+        command.commandId !== failedStop.commandId &&
+        command.status === DeviceCommandStatus.PENDING,
+    );
+
+    expect(stopCommands).toHaveLength(2);
+    expect(
+      stopCommands.find(
+        (command) => command.commandId === failedStop.commandId,
+      ),
+    ).toMatchObject({
+      status: DeviceCommandStatus.FAILED,
+      payload: {
+        sessionId: fixture.session.id,
+        reason: "SYSTEM_REQUESTED",
+      },
+    });
+    expect(retriedStop).toMatchObject({
+      status: DeviceCommandStatus.PENDING,
+      payload: {
+        sessionId: fixture.session.id,
+        reason: "SYSTEM_REQUESTED",
+      },
+    });
+    expect(session.status).toBe(ChargingSessionStatus.STOPPING);
+
+    await expect(
+      dataSource.getRepository(DeviceCommand).save({
+        id: randomUUID(),
+        commandId: randomUUID(),
+        session,
+        commandType: "STOP_CHARGING",
+        payload: {
+          sessionId: session.id,
+          reason: "SYSTEM_REQUESTED",
         },
         retryCount: 0,
         nextAttemptAt: null,

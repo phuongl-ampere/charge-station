@@ -28,5 +28,6 @@ import { PaymentsService } from "./payments.service.js";
   ],
   controllers: [PaymentsController],
   providers: [PaymentsService, PayosClient],
+  exports: [PaymentsService],
 })
 export class PaymentsModule {}

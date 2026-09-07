@@ -41,6 +41,7 @@ describe("PaymentsService webhook processing", () => {
     };
     const paymentRepository = {
       create: vi.fn().mockImplementation((entity) => entity),
+      findOneBy: vi.fn().mockResolvedValue({ checkoutUrl: null }),
       save: vi.fn().mockImplementation(async (entity) => entity),
     };
     const connectorRepository = {
@@ -89,6 +90,213 @@ describe("PaymentsService webhook processing", () => {
     expect(gateway.issueAccessToken).toHaveBeenCalledWith(
       orderRepository.create.mock.results[0]?.value.id,
     );
+  });
+
+  it("calls PayOS only after connector, order, and payment reservation commits", async () => {
+    const connector = {
+      id: randomUUID(),
+      code: "ST01-C01",
+      status: "AVAILABLE",
+      pricingPlan: {
+        hourlyPriceVnd: 5000,
+        allowedDurationsMinutes: [60],
+      },
+    } as Connector;
+    let savedPayment: PaymentTransaction | undefined;
+    const connectorRepository = {
+      findOne: vi.fn().mockResolvedValue(connector),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const orderRepository = {
+      create: vi.fn().mockImplementation((entity) => ({
+        ...entity,
+        payosOrderCode: "100001",
+      })),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const paymentRepository = {
+      create: vi.fn().mockImplementation((entity) => entity),
+      findOneBy: vi.fn().mockImplementation(async () => savedPayment),
+      save: vi.fn().mockImplementation(async (entity) => {
+        savedPayment = entity;
+        return entity;
+      }),
+    };
+    const manager = {
+      query: vi.fn().mockImplementation(async (query: string) => {
+        if (query.includes("FROM connectors")) {
+          return [{ id: connector.id }];
+        }
+        if (query.includes("FROM payment_transactions")) {
+          return [{ id: savedPayment?.id }];
+        }
+        throw new Error("Unexpected lock query");
+      }),
+      getRepository: vi.fn((entity) => {
+        if (entity === Connector) return connectorRepository;
+        if (entity === Order) return orderRepository;
+        if (entity === PaymentTransaction) return paymentRepository;
+        throw new Error("Unexpected repository");
+      }),
+    };
+    let transactionActive = false;
+    const dataSource = {
+      transaction: vi.fn(async (callback) => {
+        transactionActive = true;
+        try {
+          return await callback(manager);
+        } finally {
+          transactionActive = false;
+        }
+      }),
+    };
+    const payosClient = {
+      returnUrl: "http://localhost:5173/charge/return",
+      cancelUrl: "http://localhost:5173/charge/cancel",
+      createPaymentLink: vi.fn(async () => {
+        expect(transactionActive).toBe(false);
+        return {
+          paymentLinkId: "pl_100001",
+          checkoutUrl: "https://pay.example/100001",
+        };
+      }),
+    };
+    const service = new PaymentsService(
+      dataSource as unknown as DataSource,
+      payosClient as unknown as PayosClient,
+    );
+
+    await expect(
+      service.createOrder({
+        connectorCode: connector.code,
+        durationMinutes: 60,
+      }),
+    ).resolves.toMatchObject({
+      payment: {
+        checkoutUrl: "https://pay.example/100001",
+      },
+    });
+    expect(payosClient.createPaymentLink).toHaveBeenCalledOnce();
+  });
+
+  it("reconciles a created PayOS link after its first persistence transaction fails", async () => {
+    const connector = {
+      id: randomUUID(),
+      code: "ST01-C01",
+      status: "AVAILABLE",
+      pricingPlan: {
+        hourlyPriceVnd: 5000,
+        allowedDurationsMinutes: [60],
+      },
+    } as Connector;
+    let savedPayment: PaymentTransaction | undefined;
+    const connectorRepository = {
+      findOne: vi.fn().mockResolvedValue(connector),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const orderRepository = {
+      create: vi.fn().mockImplementation((entity) => ({
+        ...entity,
+        payosOrderCode: "100001",
+      })),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const paymentRepository = {
+      create: vi.fn().mockImplementation((entity) => entity),
+      findOne: vi.fn().mockImplementation(async () => savedPayment),
+      findOneBy: vi.fn().mockImplementation(async () => savedPayment),
+      save: vi.fn().mockImplementation(async (entity) => {
+        savedPayment = entity;
+        return entity;
+      }),
+    };
+    const manager = {
+      query: vi.fn().mockImplementation(async (query: string) => {
+        if (query.includes("FROM connectors")) {
+          return [{ id: connector.id }];
+        }
+        if (query.includes("FROM payment_transactions")) {
+          return [{ id: savedPayment?.id }];
+        }
+        throw new Error("Unexpected lock query");
+      }),
+      getRepository: vi.fn((entity) => {
+        if (entity === Connector) return connectorRepository;
+        if (entity === Order) return orderRepository;
+        if (entity === PaymentTransaction) return paymentRepository;
+        throw new Error("Unexpected repository");
+      }),
+    };
+    let transactionCount = 0;
+    const dataSource = {
+      getRepository: vi.fn((entity) => {
+        if (entity === PaymentTransaction) return paymentRepository;
+        throw new Error("Unexpected repository");
+      }),
+      transaction: vi.fn(async (callback) => {
+        transactionCount += 1;
+        if (transactionCount === 2) {
+          throw new Error("simulated payment-link persistence failure");
+        }
+        return callback(manager);
+      }),
+    };
+    const paymentLink = {
+      paymentLinkId: "pl_100001",
+      checkoutUrl: "https://pay.example/100001",
+    };
+    const payosClient = {
+      returnUrl: "http://localhost:5173/charge/return",
+      cancelUrl: "http://localhost:5173/charge/cancel",
+      createPaymentLink: vi.fn().mockResolvedValue(paymentLink),
+      getPaymentLinkInfo: vi.fn().mockResolvedValue(paymentLink),
+    };
+    const service = new PaymentsService(
+      dataSource as unknown as DataSource,
+      payosClient as unknown as PayosClient,
+    );
+    const logger = vi
+      .spyOn(Logger.prototype, "error")
+      .mockImplementation(() => undefined);
+
+    try {
+      const created = await service.createOrder({
+        connectorCode: connector.code,
+        durationMinutes: 60,
+      });
+      expect(created).toMatchObject({
+        payment: {
+          checkoutUrl: paymentLink.checkoutUrl,
+        },
+      });
+      expect(savedPayment).toMatchObject({
+        paymentLinkId: null,
+        checkoutUrl: null,
+      });
+      const recoveryService = service as unknown as {
+        getPaymentLink(orderId: string): Promise<{
+          provider: "PAYOS";
+          checkoutUrl: string;
+        }>;
+      };
+
+      await expect(
+        recoveryService.getPaymentLink(created.orderId),
+      ).resolves.toEqual({
+        provider: "PAYOS",
+        checkoutUrl: paymentLink.checkoutUrl,
+      });
+    } finally {
+      logger.mockRestore();
+    }
+
+    expect(payosClient.createPaymentLink).toHaveBeenCalledOnce();
+    expect(payosClient.getPaymentLinkInfo).toHaveBeenCalledWith(100001);
+    expect(dataSource.transaction).toHaveBeenCalledTimes(3);
+    expect(savedPayment).toMatchObject({
+      paymentLinkId: paymentLink.paymentLinkId,
+      checkoutUrl: paymentLink.checkoutUrl,
+    });
   });
 
   it("returns success after payment while a provider transport retry dispatch rejects asynchronously", async () => {

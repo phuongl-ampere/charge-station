@@ -91,6 +91,30 @@ describe("CommandsService", () => {
     ]);
   });
 
+  it.each([
+    ["an expired timestamp", "2026-09-08T10:00:00.000Z"],
+    ["a noncanonical ISO timestamp", "2026-09-08T12:00:00+00:00"],
+  ])(
+    "rejects a START command with %s before creating device state",
+    async (_name, expiresAt) => {
+      vi.setSystemTime(new Date("2026-09-08T11:00:00.000Z"));
+      const command = {
+        ...commandWithDuration(60),
+        expiresAt,
+      };
+
+      await expect(service.start(command)).resolves.toMatchObject({
+        commandId: command.commandId,
+        accepted: false,
+        status: "REJECTED",
+      });
+
+      expect(deviceState.getCommand(command.commandId)).toBeUndefined();
+      expect(deviceState.getConnector(command.connectorCode)).toBeUndefined();
+      expect(eventClient.post).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps the command accepted and turns the relay off when event delivery fails", async () => {
     eventClient.post.mockRejectedValue(new Error("Charge Station unavailable"));
 
@@ -103,6 +127,99 @@ describe("CommandsService", () => {
 
     expect(deviceState.getConnector("ST01-C01")).toBeUndefined();
     expect(eventClient.post).toHaveBeenCalledTimes(4);
+  });
+
+  it("retries a lost STOPPED delivery with its original event ID", async () => {
+    let stoppedAttempts = 0;
+    eventClient.post.mockImplementation(async (event) => {
+      if (event.type === "STOPPED" && stoppedAttempts++ === 0) {
+        throw new Error("lost STOPPED callback");
+      }
+    });
+
+    await service.start(commandWithDuration(1));
+    await vi.advanceTimersByTimeAsync(1100);
+    const firstStopped = eventClient.post.mock.calls
+      .map(([event]) => event)
+      .find((event) => event.type === "STOPPED");
+
+    expect(firstStopped).toBeDefined();
+    await vi.advanceTimersByTimeAsync(100);
+    const stoppedEvents = eventClient.post.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.type === "STOPPED");
+
+    expect(stoppedEvents).toHaveLength(2);
+    expect(stoppedEvents[1].eventId).toBe(firstStopped?.eventId);
+  });
+
+  it.each([
+    ["command_failed", "COMMAND_FAILED"],
+    ["offline", "DEVICE_OFFLINE"],
+  ])(
+    "retries the $expectedType terminal failure event before STOPPED",
+    async (mode, expectedType) => {
+      const previousMode = process.env.MOCK_IOT_FAILURE_MODE;
+      process.env.MOCK_IOT_FAILURE_MODE = mode;
+      let terminalAttempts = 0;
+      eventClient.post.mockImplementation(async (event) => {
+        if (event.type === expectedType && terminalAttempts++ === 0) {
+          throw new Error("lost terminal callback");
+        }
+      });
+
+      try {
+        await service.start(commandWithDuration(3));
+        await vi.advanceTimersByTimeAsync(100);
+        const firstFailure = eventClient.post.mock.calls
+          .map(([event]) => event)
+          .find((event) => event.type === expectedType);
+
+        expect(firstFailure).toBeDefined();
+        expect(
+          eventClient.post.mock.calls
+            .map(([event]) => event)
+            .filter((event) => event.type === "STOPPED"),
+        ).toHaveLength(0);
+
+        await vi.advanceTimersByTimeAsync(100);
+        const failures = eventClient.post.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.type === expectedType);
+
+        expect(failures).toHaveLength(2);
+        expect(failures[1].eventId).toBe(firstFailure?.eventId);
+        expect(
+          eventClient.post.mock.calls
+            .map(([event]) => event)
+            .filter((event) => event.type === "STOPPED"),
+        ).toHaveLength(1);
+      } finally {
+        if (previousMode === undefined) {
+          delete process.env.MOCK_IOT_FAILURE_MODE;
+        } else {
+          process.env.MOCK_IOT_FAILURE_MODE = previousMode;
+        }
+      }
+    },
+  );
+
+  it("clears pending terminal retry timers when device state is destroyed", async () => {
+    eventClient.post.mockImplementation(async (event) => {
+      if (event.type === "STOPPED") {
+        throw new Error("Charge Station unavailable");
+      }
+    });
+
+    await service.start(commandWithDuration(1));
+    await vi.advanceTimersByTimeAsync(1100);
+
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    const lifecycleState = deviceState as unknown as {
+      onModuleDestroy(): void;
+    };
+    lifecycleState.onModuleDestroy();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("safely handles a local callback redirect rejection", async () => {

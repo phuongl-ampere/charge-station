@@ -7,6 +7,7 @@ import {
   PaymentTransaction,
 } from "../database/data-source.js";
 import { RealtimeModule } from "../realtime/realtime.module.js";
+import { PaymentsModule } from "../payments/payments.module.js";
 import { OrdersController } from "./orders.controller.js";
 import { OrdersService } from "./orders.service.js";
 
@@ -14,6 +15,7 @@ import { OrdersService } from "./orders.service.js";
   imports: [
     TypeOrmModule.forFeature([Order, PaymentTransaction, ChargingSession]),
     RealtimeModule,
+    PaymentsModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService],

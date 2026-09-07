@@ -156,6 +156,22 @@ describe("charge capability boundary", () => {
       .expect(201);
     const otherAccessToken = otherCreated.body.realtimeAccessToken as string;
 
+    await request(app.getHttpServer())
+      .get(`/orders/${created.body.orderId as string}/payment-link`)
+      .expect(401);
+    await request(app.getHttpServer())
+      .get(`/orders/${created.body.orderId as string}/payment-link`)
+      .set("authorization", `Bearer ${otherAccessToken}`)
+      .expect(403);
+    await request(app.getHttpServer())
+      .get(`/orders/${created.body.orderId as string}/payment-link`)
+      .set("authorization", `Bearer ${accessToken}`)
+      .expect(200)
+      .expect({
+        provider: "PAYOS",
+        checkoutUrl: created.body.payment.checkoutUrl as string,
+      });
+
     const order = await dataSource.getRepository(Order).findOneByOrFail({
       id: created.body.orderId,
     });

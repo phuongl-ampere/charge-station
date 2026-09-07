@@ -265,57 +265,47 @@ describe("CommandDispatcherService", () => {
     );
   });
 
-  it("resumes a persisted retry at its scheduled attempt during bootstrap", async () => {
-    const command = createCommand({
-      retryCount: 1,
-      nextAttemptAt: new Date("2026-09-08T11:00:05.000Z"),
-    });
+  it("does not dispatch pending IoT commands during application bootstrap", async () => {
     const commandRepository = {
-      find: vi.fn().mockResolvedValue([command]),
-      findOne: vi.fn().mockResolvedValue(command),
-      save: vi.fn().mockImplementation(async (entity) => entity),
+      find: vi.fn().mockResolvedValue([]),
     };
     const dataSource = {
       getRepository: vi.fn().mockReturnValue(commandRepository),
     };
-    const iotClient = {
-      start: vi.fn().mockResolvedValue(undefined),
+    const service = new CommandDispatcherService(
+      dataSource as unknown as DataSource,
+      {} as IotServiceClient,
+    );
+
+    await expect(service.onApplicationBootstrap()).resolves.toBeUndefined();
+    expect(commandRepository.find).not.toHaveBeenCalled();
+  });
+
+  it("dispatches pending IoT commands asynchronously after server readiness", async () => {
+    const command = createCommand();
+    const commandRepository = {
+      find: vi.fn().mockResolvedValue([command]),
+    };
+    const dataSource = {
+      getRepository: vi.fn().mockReturnValue(commandRepository),
     };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      iotClient as unknown as IotServiceClient,
+      {} as IotServiceClient,
     );
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-09-08T11:00:00.000Z"));
-    const wait = vi
-      .spyOn(service as never, "wait" as never)
-      .mockImplementation(async (...args: unknown[]) => {
-        const [delayMs] = args as [number];
-        vi.setSystemTime(new Date(Date.now() + delayMs));
-      });
+    const dispatch = vi.spyOn(service, "dispatch").mockResolvedValue(undefined);
+    const readyDispatcher = service as unknown as {
+      dispatchPendingAfterReady(): void;
+    };
 
-    try {
-      await service.onApplicationBootstrap();
-    } finally {
-      vi.useRealTimers();
-    }
+    readyDispatcher.dispatchPendingAfterReady();
 
+    expect(commandRepository.find).not.toHaveBeenCalled();
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(commandRepository.find).toHaveBeenCalledWith({
       where: { status: DeviceCommandStatus.PENDING },
     });
-    expect(wait).toHaveBeenCalledWith(5_000);
-    expect(iotClient.start).toHaveBeenCalledWith({
-      commandId: command.commandId,
-      sessionId: command.session.id,
-      stationCode: "ST01",
-      connectorCode: "ST01-C01",
-      durationSeconds: 7200,
-      expiresAt: "2026-09-08T12:00:00.000Z",
-      configVersion: 1,
-    });
-    expect(command.retryCount).toBe(1);
-    expect(command.status).toBe(DeviceCommandStatus.SENT);
-    expect(command.nextAttemptAt).toBeNull();
+    expect(dispatch).toHaveBeenCalledWith(command.commandId);
   });
 
   it("marks configuration failures failed without retrying", async () => {
@@ -355,6 +345,93 @@ describe("CommandDispatcherService", () => {
     expect(command.status).toBe(DeviceCommandStatus.FAILED);
     expect(command.nextAttemptAt).toBeNull();
   });
+
+  it.each([
+    ["a canonical expired timestamp", "2026-09-08T10:00:00.000Z", null],
+    ["a noncanonical ISO timestamp", "2026-09-08T12:00:00+00:00", null],
+    [
+      "a timestamp that expires while waiting for its scheduled retry",
+      "2026-09-08T11:00:00.500Z",
+      new Date("2026-09-08T11:00:01.000Z"),
+    ],
+  ])(
+    "settles a pending start command with %s as a definitive failure",
+    async (_name, expiresAt, nextAttemptAt) => {
+      const command = createCommand({
+        nextAttemptAt,
+        payload: {
+          ...createCommand().payload,
+          expiresAt,
+        },
+      });
+      command.payload.sessionId = command.session.id;
+      const commandRepository = {
+        findOne: vi.fn().mockResolvedValue(command),
+        save: vi.fn().mockImplementation(async (entity) => entity),
+      };
+      const sessionRepository = {
+        findOneBy: vi.fn().mockResolvedValue(command.session),
+        save: vi.fn().mockImplementation(async (entity) => entity),
+      };
+      const connectorRepository = {
+        findOne: vi.fn().mockResolvedValue(command.session.connector),
+        save: vi.fn().mockImplementation(async (entity) => entity),
+      };
+      const manager = {
+        query: vi.fn().mockImplementation(async (query: string) => {
+          if (query.includes("FROM charging_sessions")) {
+            return [{ id: command.session.id }];
+          }
+          if (query.includes("FROM connectors")) {
+            return [{ id: command.session.connector.id }];
+          }
+          throw new Error("Unexpected lock query");
+        }),
+        getRepository: vi.fn((entity) => {
+          if (entity === DeviceCommand) return commandRepository;
+          if (entity === ChargingSession) return sessionRepository;
+          if (entity === Connector) return connectorRepository;
+          throw new Error("Unexpected repository");
+        }),
+      };
+      const dataSource = {
+        getRepository: vi.fn().mockReturnValue(commandRepository),
+        transaction: vi.fn(async (callback) => callback(manager)),
+      };
+      const iotClient = {
+        start: vi.fn(),
+      };
+      const service = new CommandDispatcherService(
+        dataSource as unknown as DataSource,
+        iotClient as unknown as IotServiceClient,
+      );
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-08T11:00:00.000Z"));
+      vi.spyOn(service as never, "wait" as never).mockImplementation(
+        async (...args: unknown[]) => {
+          const [delayMs] = args as [number];
+          vi.setSystemTime(new Date(Date.now() + delayMs));
+        },
+      );
+
+      try {
+        await expect(service.dispatch(command.commandId)).rejects.toThrow(
+          "Persisted device command has an expired or invalid start expiry",
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(iotClient.start).not.toHaveBeenCalled();
+      expect(command.status).toBe(DeviceCommandStatus.FAILED);
+      expect(command.session.status).toBe(ChargingSessionStatus.START_FAILED);
+      expect(command.session.connector.status).toBe("AVAILABLE");
+      expect(sessionRepository.save).toHaveBeenCalledWith(command.session);
+      expect(connectorRepository.save).toHaveBeenCalledWith(
+        command.session.connector,
+      );
+    },
+  );
 
   it("marks an invalid persisted retry schedule failed without retrying", async () => {
     const command = createCommand({

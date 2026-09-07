@@ -87,6 +87,35 @@ describe("internal command API", () => {
     process.env.SERVICE_TOKEN = "test-service-token";
   });
 
+  it.each([
+    ["an expired timestamp", "2026-09-08T10:00:00.000Z"],
+    ["a noncanonical ISO timestamp", "2026-09-08T12:00:00+00:00"],
+  ])(
+    "rejects a START command with %s before emitting device events",
+    async (_name, expiresAt) => {
+      vi.setSystemTime(new Date("2026-09-08T11:00:00.000Z"));
+      const command = {
+        ...startCommand(`command-expired-${expiresAt}`),
+        expiresAt,
+      };
+
+      await request(app.getHttpServer())
+        .post("/internal/commands/start")
+        .set("X-Service-Token", "test-service-token")
+        .send(command)
+        .expect(201)
+        .expect({
+          commandId: command.commandId,
+          accepted: false,
+          deviceId: "dev_ST01",
+          status: "REJECTED",
+        });
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(eventClient.post).not.toHaveBeenCalled();
+    },
+  );
+
   it("deduplicates commands and rejects an occupied connector", async () => {
     const first = await request(app.getHttpServer())
       .post("/internal/commands/start")
@@ -181,9 +210,9 @@ describe("internal command API", () => {
 
         await vi.advanceTimersByTimeAsync(100);
 
-        expect(eventClient.post.mock.calls.map(([event]) => event.type)).toEqual(
-          expectedTypes,
-        );
+        expect(
+          eventClient.post.mock.calls.map(([event]) => event.type),
+        ).toEqual(expectedTypes);
         expect(eventClient.post).toHaveBeenLastCalledWith(
           expect.objectContaining({
             type: "STOPPED",

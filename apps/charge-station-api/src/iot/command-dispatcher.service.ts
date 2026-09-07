@@ -30,6 +30,12 @@ import {
 
 const RETRY_DELAYS_MS = [1_000, 5_000, 20_000] as const;
 
+class DefinitiveStartCommandError extends Error {
+  constructor() {
+    super("Persisted device command has an expired or invalid start expiry");
+  }
+}
+
 @Injectable()
 export class CommandDispatcherService implements OnApplicationBootstrap {
   private readonly logger = new Logger(CommandDispatcherService.name);
@@ -43,12 +49,18 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
-    try {
-      await this.dispatchPending();
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Unable to dispatch pending IoT commands: ${message}`);
-    }
+    // Pending command recovery begins only after the HTTP listener is ready.
+  }
+
+  dispatchPendingAfterReady(): void {
+    queueMicrotask(() => {
+      void this.dispatchPending().catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(
+          `Unable to dispatch pending IoT commands: ${message}`,
+        );
+      });
+    });
   }
 
   async dispatch(commandId: string): Promise<void> {
@@ -68,15 +80,18 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
     try {
       commandPayload = toDeviceCommand(command);
     } catch (error: unknown) {
-      await this.markFailed(command, commandRepository);
+      await this.markPreDispatchFailure(command, commandRepository, error);
       throw error;
     }
 
     while (true) {
       try {
         await this.waitForScheduledAttempt(command);
+        if ("durationSeconds" in commandPayload) {
+          assertStartCommandExpiry(commandPayload.expiresAt);
+        }
       } catch (error: unknown) {
-        await this.markFailed(command, commandRepository);
+        await this.markPreDispatchFailure(command, commandRepository, error);
         throw error;
       }
       try {
@@ -154,6 +169,22 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
     command.status = DeviceCommandStatus.FAILED;
     command.nextAttemptAt = null;
     await commandRepository.save(command);
+  }
+
+  private async markPreDispatchFailure(
+    command: DeviceCommand,
+    commandRepository: Repository<DeviceCommand>,
+    error: unknown,
+  ): Promise<void> {
+    if (
+      command.commandType === "START_CHARGING" &&
+      error instanceof DefinitiveStartCommandError
+    ) {
+      await this.markDefinitiveStartFailure(command, commandRepository);
+      return;
+    }
+
+    await this.markFailed(command, commandRepository);
   }
 
   private async markRetryExhausted(
@@ -321,6 +352,7 @@ function toStartChargingCommand(command: DeviceCommand): StartChargingCommand {
   ) {
     throw new Error("Persisted device command has an invalid start payload");
   }
+  assertStartCommandExpiry(expiresAt);
 
   return {
     commandId: command.commandId,
@@ -363,6 +395,17 @@ function readString(
 
 function isPositiveInteger(value: unknown): value is number {
   return Number.isInteger(value) && typeof value === "number" && value > 0;
+}
+
+function assertStartCommandExpiry(expiresAt: string): void {
+  const expiry = new Date(expiresAt);
+  if (
+    Number.isNaN(expiry.valueOf()) ||
+    expiry.toISOString() !== expiresAt ||
+    expiry.valueOf() <= Date.now()
+  ) {
+    throw new DefinitiveStartCommandError();
+  }
 }
 
 async function lockChargingSessionId(

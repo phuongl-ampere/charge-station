@@ -13,16 +13,16 @@ The Compose stack is self-contained and local-only. Published ports bind to `127
 docker compose up -d --wait
 ```
 
-The API waits for PostgreSQL, runs its TypeORM migrations and idempotent demo seed, then starts. The seed creates station `ST01`, connector `ST01-C01`, and the 5,000 VND/hour pricing plan.
+The API waits for PostgreSQL, runs its TypeORM migrations and idempotent demo seed, then starts. The seed creates station `ST01`, connector `ST01-C01`, and the 5,000 VND/hour pricing plan. API health becomes available when its HTTP listener is ready. Pending persisted IoT commands are scheduled asynchronously only after that point, so Compose can start IoT after API health without consuming command retries before IoT is available.
 
-| Service | URL or network name |
-| --- | --- |
-| Web | `http://localhost:3000` |
-| Charge Station API | `http://localhost:4000` |
-| API health | `http://localhost:4000/health` |
-| IoT Service | `http://iot-service:4001` inside Compose |
-| IoT health | `http://iot-service:4001/health` inside Compose |
-| PostgreSQL | `postgres://charge:charge@localhost:5432/charge_station` |
+| Service            | URL or network name                                      |
+| ------------------ | -------------------------------------------------------- |
+| Web                | `http://localhost:3000`                                  |
+| Charge Station API | `http://localhost:4000`                                  |
+| API health         | `http://localhost:4000/health`                           |
+| IoT Service        | `http://iot-service:4001` inside Compose                 |
+| IoT health         | `http://iot-service:4001/health` inside Compose          |
+| PostgreSQL         | `postgres://charge:charge@localhost:5432/charge_station` |
 
 The API calls IoT at `http://iot-service:4001`; IoT posts device events to `http://charge-station-api:4000`. The web build uses `http://localhost:4000`, because that URL is resolved by the browser, not by the container.
 
@@ -55,6 +55,8 @@ MOCK_IOT_FAILURE_MODE=none
 
 The mock IoT service accepts `MOCK_IOT_FAILURE_MODE=timeout`, `offline`, or `command_failed` to exercise command failure paths. `MOCK_IOT_START_DELAY_MS` and `MOCK_IOT_HEARTBEAT_MS` control the mock timing. Change an environment value in `docker-compose.yml`, then recreate the affected service.
 
+`STOPPED`, `COMMAND_FAILED`, and `DEVICE_OFFLINE` callbacks retain their original event ID and retry after 100 ms, 500 ms, then a capped 1 second interval until the API acknowledges them. The mock clears retry timers on shutdown. Nonterminal callbacks remain best effort.
+
 ## Signed Mock Webhook
 
 The local checkout page can complete a mock payment. To test the webhook route directly, first create an order and use its `payosOrderCode` and `amountVnd` from PostgreSQL or the API test fixture. Generate a signed payload using the configured checksum key:
@@ -81,6 +83,25 @@ NODE
 ```
 
 Post the JSON printed by that command to `http://localhost:4000/payments/payos/webhook`. A valid webhook creates one command. The device callback then moves the session through `STARTING`, `CHARGING`, and `COMPLETED`; a browser return or cancel URL only displays status and never starts charging.
+
+## Payment Link Recovery
+
+Creating an order first commits the connector reservation, order, and pending
+payment transaction. PayOS payment-link creation then occurs outside the
+database transaction, followed by a short transaction that stores the link.
+This avoids holding a database lock while calling PayOS.
+
+If PayOS accepts a link but its first database update fails, the order remains
+recoverable. Use the returned order capability token with:
+
+```text
+GET /orders/:orderId/payment-link
+Authorization: Bearer <realtimeAccessToken>
+```
+
+The endpoint returns a stored link when present. Otherwise it looks up the
+existing PayOS payment request by order code and persists that same URL; it
+does not create another payment link.
 
 ## PayOS Sandbox Configuration
 

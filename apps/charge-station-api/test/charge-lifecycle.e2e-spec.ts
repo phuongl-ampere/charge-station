@@ -1,21 +1,25 @@
-import { randomUUID } from 'node:crypto';
-import type { AddressInfo } from 'node:net';
+import { randomUUID } from "node:crypto";
+import type { AddressInfo } from "node:net";
 
-import type { StartChargingCommand } from '@charge-station/contracts';
-import { ValidationPipe } from '@nestjs/common';
-import type { INestApplication } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
-import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
-import { DataType, newDb } from 'pg-mem';
-import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DataSource } from 'typeorm';
+import type {
+  DeviceEvent,
+  StartChargingCommand,
+} from "@charge-station/contracts";
+import { ValidationPipe } from "@nestjs/common";
+import type { INestApplication } from "@nestjs/common";
+import { Test } from "@nestjs/testing";
+import { getDataSourceToken, getRepositoryToken } from "@nestjs/typeorm";
+import { DataType, newDb } from "pg-mem";
+import request from "supertest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DataSource } from "typeorm";
 
-import { AppModule as IotAppModule } from '../../iot-service/src/app.module.js';
-import { DeviceStateService } from '../../iot-service/src/devices/device-state.service.js';
-import { AuthService } from '../src/auth/auth.service.js';
-import { ChargingController } from '../src/charging/charging.controller.js';
-import { ChargingService } from '../src/charging/charging.service.js';
+import { AppModule as IotAppModule } from "../../iot-service/src/app.module.js";
+import { DeviceStateService } from "../../iot-service/src/devices/device-state.service.js";
+import { ChargeStationEventClient } from "../../iot-service/src/events/charge-station-event.client.js";
+import { AuthService } from "../src/auth/auth.service.js";
+import { ChargingController } from "../src/charging/charging.controller.js";
+import { ChargingService } from "../src/charging/charging.service.js";
 import {
   ChargingSession,
   ChargingSessionStatus,
@@ -28,35 +32,35 @@ import {
   Order,
   PricingPlan,
   Station,
-} from '../src/database/data-source.js';
-import { ConnectorsController } from '../src/connectors/connectors.controller.js';
-import { ConnectorsService } from '../src/connectors/connectors.service.js';
-import { HealthController } from '../src/health.controller.js';
-import { CommandDispatcherService } from '../src/iot/command-dispatcher.service.js';
+} from "../src/database/data-source.js";
+import { ConnectorsController } from "../src/connectors/connectors.controller.js";
+import { ConnectorsService } from "../src/connectors/connectors.service.js";
+import { HealthController } from "../src/health.controller.js";
+import { CommandDispatcherService } from "../src/iot/command-dispatcher.service.js";
 import {
   DeviceEventsController,
   ServiceTokenGuard,
-} from '../src/iot/device-events.controller.js';
-import { DeviceEventsService } from '../src/iot/device-events.service.js';
-import { IotServiceClient } from '../src/iot/iot-service.client.js';
-import { configureHttpApp } from '../src/http-app.js';
-import { OrdersController } from '../src/orders/orders.controller.js';
-import { OrdersService } from '../src/orders/orders.service.js';
+} from "../src/iot/device-events.controller.js";
+import { DeviceEventsService } from "../src/iot/device-events.service.js";
+import { IotServiceClient } from "../src/iot/iot-service.client.js";
+import { configureHttpApp } from "../src/http-app.js";
+import { OrdersController } from "../src/orders/orders.controller.js";
+import { OrdersService } from "../src/orders/orders.service.js";
 import {
   PayosClient,
   type PayosWebhookData,
-} from '../src/payments/payos.client.js';
-import { PaymentsController } from '../src/payments/payments.controller.js';
-import { PaymentsService } from '../src/payments/payments.service.js';
-import { ChargeGateway } from '../src/realtime/charge.gateway.js';
+} from "../src/payments/payos.client.js";
+import { PaymentsController } from "../src/payments/payments.controller.js";
+import { PaymentsService } from "../src/payments/payments.service.js";
+import { ChargeGateway } from "../src/realtime/charge.gateway.js";
 
 class RecordedMockPayosClient extends PayosClient {
   readonly paymentLinkRequests: Array<
-    Parameters<PayosClient['createPaymentLink']>[0]
+    Parameters<PayosClient["createPaymentLink"]>[0]
   > = [];
 
   override async createPaymentLink(
-    input: Parameters<PayosClient['createPaymentLink']>[0],
+    input: Parameters<PayosClient["createPaymentLink"]>[0],
   ) {
     this.paymentLinkRequests.push({ ...input });
     return super.createPaymentLink(input);
@@ -72,27 +76,28 @@ class ShortLifecycleDeviceStateService extends DeviceStateService {
   }
 }
 
-describe('mock payment-to-charging lifecycle', () => {
+describe("mock payment-to-charging lifecycle", () => {
   let api: INestApplication;
   let iot: INestApplication;
   let dataSource: DataSource;
   let payosClient: RecordedMockPayosClient;
   let deviceState: ShortLifecycleDeviceStateService;
+  let stoppedDeliveryEventIds: string[];
   let apiBaseUrl: string;
   const environment = new Map<string, string | undefined>();
   const testEnvironment = {
-    CHARGE_STATION_API_URL: '',
-    FRONTEND_URL: 'http://localhost:3000',
-    IOT_SERVICE_URL: '',
-    JWT_SECRET: 'charge-lifecycle-test-secret',
-    MOCK_IOT_FAILURE_MODE: 'none',
-    MOCK_IOT_HEARTBEAT_MS: '100',
-    MOCK_IOT_START_DELAY_MS: '5',
-    PAYOS_API_KEY: 'test-api-key',
-    PAYOS_CHECKSUM_KEY: 'charge-lifecycle-checksum-key',
-    PAYOS_CLIENT_ID: 'test-client-id',
-    PAYOS_MODE: 'mock',
-    SERVICE_TOKEN: 'charge-lifecycle-service-token',
+    CHARGE_STATION_API_URL: "",
+    FRONTEND_URL: "http://localhost:3000",
+    IOT_SERVICE_URL: "",
+    JWT_SECRET: "charge-lifecycle-test-secret",
+    MOCK_IOT_FAILURE_MODE: "none",
+    MOCK_IOT_HEARTBEAT_MS: "100",
+    MOCK_IOT_START_DELAY_MS: "5",
+    PAYOS_API_KEY: "test-api-key",
+    PAYOS_CHECKSUM_KEY: "charge-lifecycle-checksum-key",
+    PAYOS_CLIENT_ID: "test-client-id",
+    PAYOS_MODE: "mock",
+    SERVICE_TOKEN: "charge-lifecycle-service-token",
   };
 
   beforeAll(async () => {
@@ -103,17 +108,17 @@ describe('mock payment-to-charging lifecycle', () => {
 
     const database = newDb({ autoCreateForeignKeyIndices: true });
     database.public.registerFunction({
-      name: 'version',
+      name: "version",
       returns: DataType.text,
-      implementation: () => 'PostgreSQL 16.0',
+      implementation: () => "PostgreSQL 16.0",
     });
     database.public.registerFunction({
-      name: 'current_database',
+      name: "current_database",
       returns: DataType.text,
-      implementation: () => 'charge_station_test',
+      implementation: () => "charge_station_test",
     });
     dataSource = database.adapters.createTypeormDataSource({
-      type: 'postgres',
+      type: "postgres",
       entities,
       migrations,
       migrationsRun: false,
@@ -123,19 +128,19 @@ describe('mock payment-to-charging lifecycle', () => {
 
     const station = await dataSource.getRepository(Station).save({
       id: randomUUID(),
-      code: 'ST01',
-      name: 'Lifecycle Test Station',
-      deviceId: 'dev_ST01',
+      code: "ST01",
+      name: "Lifecycle Test Station",
+      deviceId: "dev_ST01",
     });
     const pricingPlan = await dataSource.getRepository(PricingPlan).save({
       id: randomUUID(),
-      name: 'Lifecycle Test Pricing',
+      name: "Lifecycle Test Pricing",
       hourlyPriceVnd: 5000,
       allowedDurationsMinutes: [60],
     });
     await dataSource.getRepository(Connector).save({
       id: randomUUID(),
-      code: 'ST01-C01',
+      code: "ST01-C01",
       status: ConnectorStatus.AVAILABLE,
       station,
       pricingPlan,
@@ -168,7 +173,7 @@ describe('mock payment-to-charging lifecycle', () => {
           provide: AuthService,
           useValue: {
             verifyToken: () => {
-              throw new Error('User authentication is not used by this test');
+              throw new Error("User authentication is not used by this test");
             },
           },
         },
@@ -182,22 +187,36 @@ describe('mock payment-to-charging lifecycle', () => {
     }).compile();
     api = apiModule.createNestApplication();
     configureHttpApp(api);
-    await api.listen(0, '127.0.0.1');
+    await api.listen(0, "127.0.0.1");
     apiBaseUrl = localUrl(api);
     process.env.CHARGE_STATION_API_URL = apiBaseUrl;
 
     deviceState = new ShortLifecycleDeviceStateService();
+    stoppedDeliveryEventIds = [];
+    const eventClient = new ChargeStationEventClient();
     const iotModule = await Test.createTestingModule({
       imports: [IotAppModule],
     })
       .overrideProvider(DeviceStateService)
       .useValue(deviceState)
+      .overrideProvider(ChargeStationEventClient)
+      .useValue({
+        post: async (event: DeviceEvent) => {
+          if (event.type === "STOPPED") {
+            stoppedDeliveryEventIds.push(event.eventId);
+            if (stoppedDeliveryEventIds.length === 1) {
+              throw new Error("simulated lost STOPPED callback");
+            }
+          }
+          await eventClient.post(event);
+        },
+      })
       .compile();
     iot = iotModule.createNestApplication();
     iot.useGlobalPipes(
       new ValidationPipe({ transform: true, whitelist: true }),
     );
-    await iot.listen(0, '127.0.0.1');
+    await iot.listen(0, "127.0.0.1");
     process.env.IOT_SERVICE_URL = localUrl(iot);
   });
 
@@ -214,33 +233,33 @@ describe('mock payment-to-charging lifecycle', () => {
     }
   });
 
-  it('starts exactly one device timer only after a signed webhook and completes from the device STOPPED event', async () => {
+  it("retries a lost STOPPED callback and completes only after the API acknowledges it", async () => {
     await request(api.getHttpServer())
-      .get('/health')
+      .get("/health")
       .expect(200)
-      .expect({ status: 'ok' });
+      .expect({ status: "ok" });
     await request(iot.getHttpServer())
-      .get('/health')
+      .get("/health")
       .expect(200)
-      .expect({ status: 'ok' });
+      .expect({ status: "ok" });
     await request(api.getHttpServer())
-      .options('/public/connectors/ST01-C01')
-      .set('origin', 'http://localhost:3000')
-      .set('access-control-request-method', 'GET')
-      .expect('access-control-allow-origin', 'http://localhost:3000')
+      .options("/public/connectors/ST01-C01")
+      .set("origin", "http://localhost:3000")
+      .set("access-control-request-method", "GET")
+      .expect("access-control-allow-origin", "http://localhost:3000")
       .expect(204);
 
     const connector = await request(api.getHttpServer())
-      .get('/public/connectors/ST01-C01')
+      .get("/public/connectors/ST01-C01")
       .expect(200);
     expect(connector.body).toMatchObject({
-      connectorCode: 'ST01-C01',
+      connectorCode: "ST01-C01",
       status: ConnectorStatus.AVAILABLE,
     });
 
     const created = await request(api.getHttpServer())
-      .post('/orders')
-      .send({ connectorCode: 'ST01-C01', durationMinutes: 60 })
+      .post("/orders")
+      .send({ connectorCode: "ST01-C01", durationMinutes: 60 })
       .expect(201);
     const accessToken = created.body.realtimeAccessToken as string;
     expect(payosClient.paymentLinkRequests).toHaveLength(1);
@@ -255,21 +274,21 @@ describe('mock payment-to-charging lifecycle', () => {
       orderCode: Number(order.payosOrderCode),
       amount: order.amountVnd,
       paymentLinkId: `mock_${order.payosOrderCode}`,
-      status: 'PAID',
+      status: "PAID",
     };
     const webhook = {
-      code: '00',
+      code: "00",
       success: true,
       data: webhookData,
       signature: payosClient.signWebhook(webhookData),
     };
 
     await request(api.getHttpServer())
-      .post('/payments/payos/webhook')
+      .post("/payments/payos/webhook")
       .send(webhook)
       .expect(201);
     await request(api.getHttpServer())
-      .post('/payments/payos/webhook')
+      .post("/payments/payos/webhook")
       .send(webhook)
       .expect(201);
 
@@ -284,12 +303,12 @@ describe('mock payment-to-charging lifecycle', () => {
       () => readSession(api, created.body.orderId, accessToken),
       (session) => session.status === ChargingSessionStatus.CHARGING,
     );
-    expect(runningSession.timerAuthority).toBe('DEVICE');
-    expect(deviceState.getSession(runningSession.id)?.status).toBe('RUNNING');
+    expect(runningSession.timerAuthority).toBe("DEVICE");
+    expect(deviceState.getSession(runningSession.id)?.status).toBe("RUNNING");
     await eventually(
       () =>
         dataSource.getRepository(DeviceEvent).countBy({
-          eventType: 'RUNNING',
+          eventType: "RUNNING",
         }),
       (count) => count === 1,
     );
@@ -306,20 +325,25 @@ describe('mock payment-to-charging lifecycle', () => {
       3_000,
     );
     expect(completedSession.status).toBe(ChargingSessionStatus.COMPLETED);
-    expect(deviceState.getCommand(deviceState.startTimerCommands[0].commandId)?.status).toBe(
-      'STOPPED',
-    );
+    expect(stoppedDeliveryEventIds).toHaveLength(2);
+    expect(stoppedDeliveryEventIds[1]).toBe(stoppedDeliveryEventIds[0]);
+    expect(
+      deviceState.getCommand(deviceState.startTimerCommands[0].commandId)
+        ?.status,
+    ).toBe("STOPPED");
     await eventually(
       () =>
         dataSource.getRepository(DeviceEvent).countBy({
-          eventType: 'STOPPED',
+          eventType: "STOPPED",
         }),
       (count) => count === 1,
     );
     expect(
-      (await dataSource.getRepository(Connector).findOneByOrFail({
-        code: 'ST01-C01',
-      })).status,
+      (
+        await dataSource.getRepository(Connector).findOneByOrFail({
+          code: "ST01-C01",
+        })
+      ).status,
     ).toBe(ConnectorStatus.AVAILABLE);
   });
 });
@@ -331,15 +355,15 @@ async function readSession(
 ): Promise<{
   id: string;
   status: ChargingSessionStatus;
-  timerAuthority: 'DEVICE';
+  timerAuthority: "DEVICE";
 }> {
   const order = await request(api.getHttpServer())
     .get(`/orders/${orderId}`)
-    .set('authorization', `Bearer ${accessToken}`)
+    .set("authorization", `Bearer ${accessToken}`)
     .expect(200);
   return request(api.getHttpServer())
     .get(`/sessions/${order.body.sessionId as string}`)
-    .set('authorization', `Bearer ${accessToken}`)
+    .set("authorization", `Bearer ${accessToken}`)
     .expect(200)
     .then((response) => response.body);
 }
@@ -353,7 +377,9 @@ async function eventually<T>(
   let value = await read();
   while (!matches(value)) {
     if (Date.now() >= deadline) {
-      throw new Error(`Timed out waiting for lifecycle state: ${JSON.stringify(value)}`);
+      throw new Error(
+        `Timed out waiting for lifecycle state: ${JSON.stringify(value)}`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
     value = await read();

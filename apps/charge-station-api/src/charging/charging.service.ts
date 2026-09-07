@@ -93,13 +93,29 @@ export class ChargingService {
       if (existingCommand) {
         return existingCommand.commandId;
       }
-      if (
+
+      let reason: "USER_REQUESTED" | "SYSTEM_REQUESTED" = "USER_REQUESTED";
+      if (session.status === ChargingSessionStatus.STOPPING) {
+        const failedCommand = await commandRepository.findOne({
+          where: {
+            session: { id: session.id },
+            commandType: "STOP_CHARGING",
+            status: DeviceCommandStatus.FAILED,
+          },
+          order: { createdAt: "DESC" },
+        });
+        if (!failedCommand) {
+          throw new BadRequestException("Charging session cannot be stopped");
+        }
+        reason = readStopReason(failedCommand.payload);
+      } else if (
         session.status !== ChargingSessionStatus.STARTING &&
         session.status !== ChargingSessionStatus.CHARGING &&
         session.status !== ChargingSessionStatus.DEVICE_OFFLINE
       ) {
         throw new BadRequestException("Charging session cannot be stopped");
       }
+
       session.status = ChargingSessionStatus.STOPPING;
       await sessionRepository.save(session);
 
@@ -110,7 +126,7 @@ export class ChargingService {
         commandType: "STOP_CHARGING",
         payload: {
           sessionId: session.id,
-          reason: "USER_REQUESTED",
+          reason,
         },
         retryCount: 0,
         status: DeviceCommandStatus.PENDING,
@@ -160,9 +176,7 @@ export class ChargingService {
       if (!command) {
         throw new NotFoundException("Start command not found");
       }
-      if (
-        !hasUnexpiredStartPayload(command.payload, session.expectedEndAt)
-      ) {
+      if (!hasUnexpiredStartPayload(command.payload, session.expectedEndAt)) {
         throw new BadRequestException(
           "The original start command is no longer recoverable",
         );
@@ -253,6 +267,16 @@ function hasUnexpiredStartPayload(
     expiry.valueOf() > Date.now() &&
     expectedEndAt.valueOf() > Date.now()
   );
+}
+
+function readStopReason(
+  payload: Record<string, unknown>,
+): "USER_REQUESTED" | "SYSTEM_REQUESTED" {
+  const reason = payload.reason;
+  if (reason !== "USER_REQUESTED" && reason !== "SYSTEM_REQUESTED") {
+    throw new BadRequestException("Failed stop command has an invalid reason");
+  }
+  return reason;
 }
 
 async function lockChargingSessionId(
