@@ -76,3 +76,22 @@ Implemented and committed Task 5 on branch `feat/charge-station-mvp`.
 - `pnpm --filter @charge-station/iot-service build`: passed.
 - `pnpm exec prettier --check apps/iot-service/package.json apps/iot-service/src apps/iot-service/tsconfig.json apps/iot-service/vitest.config.ts apps/iot-service/vitest.e2e.config.ts`: passed.
 - `git diff --cached --check`: passed before the fix commit.
+
+## Re-Review Fixes
+
+- Implementation commit: `8fe00fb` (`fix: serialize mock iot event delivery`)
+- Scope: `apps/iot-service` only; Charge Station API and Task 4 files were not modified.
+- Serialized `COMMAND_ACCEPTED`, `RUNNING`, `HEARTBEAT`, and `STOPPED` delivery per session with a promise queue. Each delivery catches synchronous and asynchronous callback failures, logs them, and allows later events and timer safety to continue.
+- Manual `STOP_CHARGING` regression coverage verifies heartbeat and expiry timers are cleared, with no additional `HEARTBEAT` or duplicate `STOPPED` event after stopping.
+
+### TDD Evidence
+
+1. Red: `pnpm --filter @charge-station/iot-service test -- src/commands/commands.service.spec.ts` failed with the new ordering test because the existing fire-and-forget implementation invoked later event callbacks before `COMMAND_ACCEPTED` resolved.
+2. Green: `pnpm --filter @charge-station/iot-service test -- src/commands/commands.service.spec.ts src/events/charge-station-event.client.spec.ts` passed with 2 test files and 11 tests.
+
+### Verification
+
+- `pnpm --filter @charge-station/iot-service test`: passed, 2 test files and 11 tests.
+- `pnpm --filter @charge-station/iot-service test:e2e -- commands.e2e-spec.ts`: passed, 1 test file and 4 tests.
+- `pnpm --filter @charge-station/iot-service build`: passed.
+- `git diff --check`: passed before commit.
