@@ -20,4 +20,6 @@ Open `http://localhost:3000/scan/ST01-C01`. The local mock checkout is served by
 
 Stop services with `docker compose down`. To remove local database data as well, run `docker compose down -v`.
 
-See [local development](docs/local-development.md) for environment variables, signed mock webhook testing, mock failure modes, verification commands, and PayOS production callback requirements.
+See [local development](docs/local-development.md) for environment variables,
+signed mock webhook testing, mock failure modes, verification commands, and
+PayOS sandbox or production callback requirements.

@@ -82,6 +82,32 @@ NODE
 
 Post the JSON printed by that command to `http://localhost:4000/payments/payos/webhook`. A valid webhook creates one command. The device callback then moves the session through `STARTING`, `CHARGING`, and `COMPLETED`; a browser return or cancel URL only displays status and never starts charging.
 
+## PayOS Sandbox Configuration
+
+The default `mock` mode is the correct mode for fully local development. To
+exercise a PayOS sandbox checkout, set `PAYOS_MODE=live` and use sandbox
+credentials issued by PayOS:
+
+```text
+PAYOS_MODE=live
+PAYOS_CLIENT_ID=<sandbox-client-id>
+PAYOS_API_KEY=<sandbox-api-key>
+PAYOS_CHECKSUM_KEY=<sandbox-checksum-key>
+PAYOS_RETURN_URL=https://<public-api-host>/payments/payos/return
+PAYOS_CANCEL_URL=https://<public-api-host>/payments/payos/cancel
+```
+
+Register this sandbox webhook in the PayOS dashboard:
+
+```text
+https://<public-api-host>/payments/payos/webhook
+```
+
+PayOS cannot reach `localhost`. Use a temporary HTTPS tunnel or a
+non-production deployed API host for sandbox callbacks. Keep the local mock
+IoT Service enabled while validating sandbox checkout. The signed webhook
+remains the only path that can start charging.
+
 ## PayOS Production Configuration
 
 Set `PAYOS_MODE=live` only after configuring PayOS credentials and publicly reachable HTTPS URLs. In the PayOS dashboard, configure the webhook as:
