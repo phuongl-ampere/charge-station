@@ -506,6 +506,24 @@ input {
 .stop-button:hover {
   background: #af3f34;
 }
+.retry-button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--signal);
+  border-radius: 8px;
+  color: var(--signal);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 700;
+  gap: 7px;
+  min-height: 42px;
+  padding: 0 14px;
+}
+.retry-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
 @media (max-width: 560px) {
   .topbar {
     padding: 0 16px;

@@ -8,6 +8,7 @@ import {
   PauseCircle,
   PlugZap,
   Radio,
+  RotateCw,
   Square,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -23,7 +24,7 @@ import { createChargeSocket, type ChargeSocket } from "../lib/socket";
 interface ChargingStatusProps {
   orderId: string;
   accessToken?: string;
-  api?: Pick<ChargeApi, "getOrder" | "getSession" | "stopSession">;
+  api?: Pick<ChargeApi, "getOrder" | "getSession" | "stopSession" | "retryStart">;
   socket?: ChargeSocket;
 }
 
@@ -135,6 +136,7 @@ export function ChargingStatus({
   const [localSocket, setLocalSocket] = useState<ChargeSocket | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const socket = suppliedSocket ?? localSocket;
   const phase = phaseFor(order, session);
 
@@ -262,11 +264,31 @@ export function ChargingStatus({
     }
   }
 
+  async function retryChargingStart(): Promise<void> {
+    if (!sessionId || !accessToken) return;
+    setRetrying(true);
+    try {
+      await api.retryStart(sessionId, accessToken);
+      await refreshSession(sessionId);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to retry charging start",
+      );
+    } finally {
+      setRetrying(false);
+    }
+  }
+
   const canStop = Boolean(
     sessionId &&
     accessToken &&
     session &&
     ["STARTING", "CHARGING", "STOPPING"].includes(session.status),
+  );
+  const canRetryStart = Boolean(
+    sessionId && accessToken && session?.status === "START_FAILED",
   );
 
   return (
@@ -343,6 +365,17 @@ export function ChargingStatus({
             >
               <Square size={15} fill="currentColor" />
               {stopping ? "Requesting stop" : "Stop charging"}
+            </button>
+          )}
+          {canRetryStart && (
+            <button
+              className="retry-button"
+              type="button"
+              disabled={retrying}
+              onClick={retryChargingStart}
+            >
+              <RotateCw size={15} />
+              {retrying ? "Retrying start" : "Retry charging start"}
             </button>
           )}
         </div>

@@ -1,4 +1,5 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChargingStatus } from "./ChargingStatus";
@@ -38,6 +39,7 @@ describe("ChargingStatus", () => {
       }),
       getSession: vi.fn(),
       stopSession: vi.fn(),
+      retryStart: vi.fn(),
     };
 
     render(
@@ -77,6 +79,7 @@ describe("ChargingStatus", () => {
       }),
       getSession: vi.fn(),
       stopSession: vi.fn(),
+      retryStart: vi.fn(),
     };
 
     const view = render(<ChargingStatus orderId="ord_1" api={api} />);
@@ -133,6 +136,7 @@ describe("ChargingStatus", () => {
         timerAuthority: "DEVICE",
       }),
       stopSession: vi.fn().mockResolvedValue({ accepted: true }),
+      retryStart: vi.fn().mockResolvedValue({ accepted: true }),
     };
 
     const view = render(<ChargingStatus orderId="ord_1" api={api} />);
@@ -236,6 +240,7 @@ describe("ChargingStatus", () => {
       }),
       getSession: vi.fn(),
       stopSession: vi.fn(),
+      retryStart: vi.fn(),
     };
 
     const view = render(
@@ -261,5 +266,54 @@ describe("ChargingStatus", () => {
 
     view.unmount();
     expect(secondSocket.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a failed start with its session capability", async () => {
+    const user = userEvent.setup();
+    const socket = {
+      connected: false,
+      disconnect: vi.fn(),
+      emit: vi.fn(),
+      off: vi.fn(),
+      on: vi.fn(),
+    };
+    const api = {
+      getOrder: vi.fn().mockResolvedValue({
+        amountVnd: 5000,
+        connectorCode: "ST01-C01",
+        currency: "VND",
+        durationMinutes: 60,
+        id: "ord_1",
+        payment: { provider: "PAYOS", status: "PAID" },
+        sessionId: "ses_1",
+        status: "PAID",
+      }),
+      getSession: vi.fn().mockResolvedValue({
+        estimatedRemainingSeconds: null,
+        id: "ses_1",
+        lastDeviceEventAt: null,
+        operationalWarning: null,
+        orderId: "ord_1",
+        status: "START_FAILED",
+        timerAuthority: "DEVICE",
+      }),
+      retryStart: vi.fn().mockResolvedValue({ accepted: true }),
+      stopSession: vi.fn(),
+    };
+
+    render(
+      <ChargingStatus
+        orderId="ord_1"
+        accessToken="retry-capability"
+        api={api}
+        socket={socket}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Retry charging start" }),
+    );
+
+    expect(api.retryStart).toHaveBeenCalledWith("ses_1", "retry-capability");
   });
 });

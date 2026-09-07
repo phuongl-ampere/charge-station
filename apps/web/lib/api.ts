@@ -60,6 +60,10 @@ export interface ChargeApi {
     sessionId: string,
     accessToken: string,
   ): Promise<{ accepted: true }>;
+  retryStart(
+    sessionId: string,
+    accessToken: string,
+  ): Promise<{ accepted: true }>;
 }
 
 function localUrl(value: string | undefined, fallback: string): URL {
@@ -162,6 +166,15 @@ export function createChargeApi(origin = localApiOrigin): ChargeApi {
       request<{ accepted: true }>(
         local,
         `/sessions/${encodeURIComponent(sessionId)}/stop`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${accessToken}` },
+        },
+      ),
+    retryStart: (sessionId, accessToken) =>
+      request<{ accepted: true }>(
+        local,
+        `/sessions/${encodeURIComponent(sessionId)}/retry-start`,
         {
           method: "POST",
           headers: { authorization: `Bearer ${accessToken}` },
