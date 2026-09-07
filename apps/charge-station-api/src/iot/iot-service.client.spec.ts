@@ -15,6 +15,11 @@ const command = {
   expiresAt: "2026-09-08T12:00:00.000Z",
   configVersion: 1,
 };
+const stopCommand = {
+  commandId: "cmd_stop_1",
+  sessionId: "session_1",
+  reason: "USER_REQUESTED" as const,
+};
 
 describe("IotServiceClient", () => {
   afterEach(() => {
@@ -41,6 +46,33 @@ describe("IotServiceClient", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:4100/api/internal/commands/start",
+      expect.objectContaining({
+        redirect: "error",
+        headers: expect.objectContaining({
+          "x-service-token": "local-token",
+        }),
+      }),
+    );
+  });
+
+  it("posts a stop command only to the configured local IoT service", async () => {
+    process.env.IOT_SERVICE_URL = "http://127.0.0.1:4100/api";
+    process.env.SERVICE_TOKEN = "local-token";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ commandId: stopCommand.commandId, accepted: true }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new IotServiceClient().stop(stopCommand);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:4100/api/internal/commands/stop",
       expect.objectContaining({
         redirect: "error",
         headers: expect.objectContaining({

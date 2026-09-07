@@ -1,16 +1,30 @@
 import { Injectable } from "@nestjs/common";
 
-import type { StartChargingCommand } from "@charge-station/contracts";
+import type {
+  StartChargingCommand,
+  StopChargingCommand,
+} from "@charge-station/contracts";
 
 @Injectable()
 export class IotServiceClient {
   async start(command: StartChargingCommand): Promise<void> {
+    await this.send(command, "start");
+  }
+
+  async stop(command: StopChargingCommand): Promise<void> {
+    await this.send(command, "stop");
+  }
+
+  private async send(
+    command: StartChargingCommand | StopChargingCommand,
+    action: "start" | "stop",
+  ): Promise<void> {
     const serviceToken = process.env.SERVICE_TOKEN;
     if (!serviceToken) {
       throw new Error("SERVICE_TOKEN must be configured");
     }
 
-    const endpoint = this.commandEndpoint();
+    const endpoint = this.commandEndpoint(action);
     let response: Response;
     try {
       response = await fetch(endpoint, {
@@ -53,7 +67,7 @@ export class IotServiceClient {
     }
   }
 
-  private commandEndpoint(): string {
+  private commandEndpoint(action: "start" | "stop"): string {
     const configuredUrl = process.env.IOT_SERVICE_URL;
     if (!configuredUrl) {
       throw new Error("IOT_SERVICE_URL must be configured");
@@ -83,7 +97,7 @@ export class IotServiceClient {
       throw new Error("IOT_SERVICE_URL must use a local service destination");
     }
 
-    baseUrl.pathname = `${baseUrl.pathname.replace(/\/+$/, "")}/internal/commands/start`;
+    baseUrl.pathname = `${baseUrl.pathname.replace(/\/+$/, "")}/internal/commands/${action}`;
     baseUrl.search = "";
     baseUrl.hash = "";
     return baseUrl.toString();

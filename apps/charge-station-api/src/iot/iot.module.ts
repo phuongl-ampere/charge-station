@@ -14,9 +14,11 @@ import {
 } from "./device-events.controller.js";
 import { DeviceEventsService } from "./device-events.service.js";
 import { IotServiceClient } from "./iot-service.client.js";
+import { RealtimeModule } from "../realtime/realtime.module.js";
 
 @Module({
   imports: [
+    RealtimeModule,
     TypeOrmModule.forFeature([
       ChargingSession,
       Connector,

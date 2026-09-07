@@ -5,14 +5,14 @@ import {
   OnApplicationBootstrap,
 } from "@nestjs/common";
 import { InjectDataSource } from "@nestjs/typeorm";
-import type { StartChargingCommand } from "@charge-station/contracts";
+import type {
+  StartChargingCommand,
+  StopChargingCommand,
+} from "@charge-station/contracts";
 import { DataSource, Repository } from "typeorm";
 
 import { DeviceCommand, DeviceCommandStatus } from "../database/data-source.js";
-import {
-  IotServiceClient,
-  IotTransportError,
-} from "./iot-service.client.js";
+import { IotServiceClient, IotTransportError } from "./iot-service.client.js";
 
 const RETRY_DELAYS_MS = [1_000, 5_000, 20_000] as const;
 
@@ -47,9 +47,9 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
       return;
     }
 
-    let startCommand: StartChargingCommand;
+    let commandPayload: StartChargingCommand | StopChargingCommand;
     try {
-      startCommand = toStartChargingCommand(command);
+      commandPayload = toDeviceCommand(command);
     } catch (error: unknown) {
       await this.markFailed(command, commandRepository);
       throw error;
@@ -63,7 +63,7 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
         throw error;
       }
       try {
-        await this.iotServiceClient.start(startCommand);
+        await this.send(commandPayload);
         command.status = DeviceCommandStatus.SENT;
         command.nextAttemptAt = null;
         await commandRepository.save(command);
@@ -90,6 +90,16 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
         await this.wait(delayMs);
       }
     }
+  }
+
+  private async send(
+    command: StartChargingCommand | StopChargingCommand,
+  ): Promise<void> {
+    if ("durationSeconds" in command) {
+      await this.iotServiceClient.start(command);
+      return;
+    }
+    await this.iotServiceClient.stop(command);
   }
 
   protected wait(delayMs: number): Promise<void> {
@@ -140,6 +150,18 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
   }
 }
 
+function toDeviceCommand(
+  command: DeviceCommand,
+): StartChargingCommand | StopChargingCommand {
+  if (command.commandType === "START_CHARGING") {
+    return toStartChargingCommand(command);
+  }
+  if (command.commandType === "STOP_CHARGING") {
+    return toStopChargingCommand(command);
+  }
+  throw new Error("Persisted device command has an invalid command type");
+}
+
 function toStartChargingCommand(command: DeviceCommand): StartChargingCommand {
   const payload = command.payload;
   const sessionId = readString(payload, "sessionId");
@@ -167,10 +189,30 @@ function toStartChargingCommand(command: DeviceCommand): StartChargingCommand {
   };
 }
 
-function readString(payload: Record<string, unknown>, key: string): string {
+function toStopChargingCommand(command: DeviceCommand): StopChargingCommand {
+  const sessionId = readString(command.payload, "sessionId", "stop");
+  const reason = command.payload.reason;
+  if (reason !== "USER_REQUESTED" && reason !== "SYSTEM_REQUESTED") {
+    throw new Error("Persisted device command has an invalid stop payload");
+  }
+
+  return {
+    commandId: command.commandId,
+    sessionId,
+    reason,
+  };
+}
+
+function readString(
+  payload: Record<string, unknown>,
+  key: string,
+  commandType: "start" | "stop" = "start",
+): string {
   const value = payload[key];
   if (typeof value !== "string" || !value) {
-    throw new Error("Persisted device command has an invalid start payload");
+    throw new Error(
+      `Persisted device command has an invalid ${commandType} payload`,
+    );
   }
   return value;
 }

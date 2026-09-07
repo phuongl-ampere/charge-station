@@ -5,6 +5,7 @@ import type { DataSource } from "typeorm";
 
 import {
   ChargingSession,
+  ChargingSessionStatus,
   Connector,
   DeviceCommand,
   Order,
@@ -13,11 +14,81 @@ import {
   PaymentTransactionStatus,
 } from "../database/data-source.js";
 import type { CommandDispatcherService } from "../iot/command-dispatcher.service.js";
+import type { ChargeGateway } from "../realtime/charge.gateway.js";
 import type { PayosClient } from "./payos.client.js";
 import type { PayosWebhook } from "./payos.client.js";
 import { PaymentsService } from "./payments.service.js";
 
 describe("PaymentsService webhook processing", () => {
+  it("returns a signed realtime access token after persisting a new order", async () => {
+    const connector = {
+      id: randomUUID(),
+      code: "ST01-C01",
+      status: "AVAILABLE",
+      pricingPlan: {
+        hourlyPriceVnd: 5000,
+        allowedDurationsMinutes: [60, 120],
+      },
+    } as Connector;
+    const orderRepository = {
+      create: vi.fn().mockImplementation((entity) => ({
+        ...entity,
+        payosOrderCode: "100001",
+      })),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const paymentRepository = {
+      create: vi.fn().mockImplementation((entity) => entity),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const connectorRepository = {
+      findOne: vi.fn().mockResolvedValue(connector),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const manager = {
+      query: vi.fn().mockResolvedValue([{ id: connector.id }]),
+      getRepository: vi.fn((entity) => {
+        if (entity === Connector) return connectorRepository;
+        if (entity === Order) return orderRepository;
+        if (entity === PaymentTransaction) return paymentRepository;
+        throw new Error("Unexpected repository");
+      }),
+    };
+    const dataSource = {
+      transaction: vi.fn(async (callback) => callback(manager)),
+    };
+    const gateway = {
+      issueAccessToken: vi.fn().mockReturnValue("signed-realtime-token"),
+    };
+    const client = {
+      returnUrl: "http://localhost:5173/charge/return",
+      cancelUrl: "http://localhost:5173/charge/cancel",
+      createPaymentLink: vi.fn().mockResolvedValue({
+        paymentLinkId: "pl_123",
+        checkoutUrl: "http://localhost:4000/mock-checkout",
+      }),
+    };
+    const service = new PaymentsService(
+      dataSource as unknown as DataSource,
+      client as unknown as PayosClient,
+      undefined,
+      gateway as unknown as ChargeGateway,
+    );
+
+    await expect(
+      service.createOrder({
+        connectorCode: connector.code,
+        durationMinutes: 120,
+      }),
+    ).resolves.toMatchObject({
+      orderId: expect.any(String),
+      realtimeAccessToken: "signed-realtime-token",
+    });
+    expect(gateway.issueAccessToken).toHaveBeenCalledWith(
+      orderRepository.create.mock.results[0]?.value.id,
+    );
+  });
+
   it("marks the order paid and creates exactly one start command for a valid webhook", async () => {
     const pendingOrder = {
       id: randomUUID(),
@@ -88,10 +159,19 @@ describe("PaymentsService webhook processing", () => {
         expect(transactionCommitted).toBe(true);
       }),
     };
+    const gateway = {
+      publishOrder: vi.fn(() => {
+        expect(transactionCommitted).toBe(true);
+      }),
+      publishSession: vi.fn(() => {
+        expect(transactionCommitted).toBe(true);
+      }),
+    };
     const service = new PaymentsService(
       dataSource as unknown as DataSource,
       client as unknown as PayosClient,
       commandDispatcher as unknown as CommandDispatcherService,
+      gateway as unknown as ChargeGateway,
     );
     const body: PayosWebhook = {
       code: "00",
@@ -128,6 +208,16 @@ describe("PaymentsService webhook processing", () => {
     );
     expect(commandDispatcher.dispatch).toHaveBeenCalledWith(
       commandRepository.create.mock.results[0]?.value.commandId,
+    );
+    expect(gateway.publishOrder).toHaveBeenCalledWith(
+      pendingOrder.id,
+      "payment.updated",
+      OrderStatus.PAID,
+    );
+    expect(gateway.publishSession).toHaveBeenCalledWith(
+      sessionRepository.create.mock.results[0]?.value.id,
+      "session.updated",
+      ChargingSessionStatus.PENDING,
     );
   });
 

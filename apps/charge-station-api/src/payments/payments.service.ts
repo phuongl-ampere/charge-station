@@ -23,6 +23,7 @@ import {
   PaymentTransactionStatus,
 } from "../database/data-source.js";
 import { CommandDispatcherService } from "../iot/command-dispatcher.service.js";
+import { ChargeGateway } from "../realtime/charge.gateway.js";
 import { PayosClient } from "./payos.client.js";
 import type { CreateOrderDto } from "./dto/create-order.dto.js";
 import { parsePayosWebhook } from "./payos-webhook.js";
@@ -35,6 +36,9 @@ export class PaymentsService {
     @Optional()
     @Inject(CommandDispatcherService)
     private readonly commandDispatcher?: CommandDispatcherService,
+    @Optional()
+    @Inject(ChargeGateway)
+    private readonly gateway?: ChargeGateway,
   ) {}
 
   async createOrder(input: CreateOrderDto): Promise<{
@@ -42,6 +46,7 @@ export class PaymentsService {
     amount: number;
     currency: string;
     payment: { provider: "PAYOS"; checkoutUrl: string };
+    realtimeAccessToken?: string;
   }> {
     if (
       !Number.isInteger(input.durationMinutes) ||
@@ -53,7 +58,7 @@ export class PaymentsService {
       );
     }
 
-    return this.dataSource.transaction(async (manager) => {
+    const result = await this.dataSource.transaction(async (manager) => {
       const connectorRepository = manager.getRepository(Connector);
       const orderRepository = manager.getRepository(Order);
       const paymentRepository = manager.getRepository(PaymentTransaction);
@@ -141,11 +146,17 @@ export class PaymentsService {
         amount,
         currency: order.currency,
         payment: {
-          provider: "PAYOS",
+          provider: "PAYOS" as const,
           checkoutUrl: paymentLink.checkoutUrl,
         },
       };
     });
+    return this.gateway
+      ? {
+          ...result,
+          realtimeAccessToken: this.gateway.issueAccessToken(result.orderId),
+        }
+      : result;
   }
 
   async handleWebhook(body: unknown): Promise<{ success: true }> {
@@ -175,7 +186,11 @@ export class PaymentsService {
         throw new NotFoundException("PayOS order not found");
       }
       if (payment.status !== PaymentTransactionStatus.PENDING) {
-        return { success: true };
+        return {
+          success: true,
+          orderId: payment.order.id,
+          orderStatus: payment.order.status,
+        };
       }
       if (amount !== payment.order.amountVnd) {
         throw new BadRequestException(
@@ -254,8 +269,29 @@ export class PaymentsService {
       });
       await commandRepository.save(command);
 
-      return { success: true, commandId: command.commandId };
+      return {
+        success: true,
+        commandId: command.commandId,
+        orderId: payment.order.id,
+        orderStatus: payment.order.status,
+        sessionId: savedSession.id,
+        sessionStatus: savedSession.status,
+      };
     });
+    if (result.orderId && result.orderStatus) {
+      this.gateway?.publishOrder(
+        result.orderId,
+        "payment.updated",
+        result.orderStatus,
+      );
+    }
+    if (result.sessionId && result.sessionStatus) {
+      this.gateway?.publishSession(
+        result.sessionId,
+        "session.updated",
+        result.sessionStatus,
+      );
+    }
     if (result.commandId) {
       await this.commandDispatcher?.dispatch(result.commandId);
     }

@@ -50,6 +50,41 @@ describe("CommandDispatcherService", () => {
     expect(commandRepository.save).toHaveBeenCalledWith(command);
   });
 
+  it("sends a persisted stop command through the same dispatcher", async () => {
+    const command = createCommand({
+      commandType: "STOP_CHARGING",
+      payload: {
+        sessionId: "session_1",
+        reason: "USER_REQUESTED",
+      },
+    });
+    const commandRepository = {
+      findOne: vi.fn().mockResolvedValue(command),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const dataSource = {
+      getRepository: vi.fn().mockReturnValue(commandRepository),
+    };
+    const iotClient = {
+      start: vi.fn(),
+      stop: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new CommandDispatcherService(
+      dataSource as unknown as DataSource,
+      iotClient as unknown as IotServiceClient,
+    );
+
+    await service.dispatch(command.commandId);
+
+    expect(iotClient.stop).toHaveBeenCalledWith({
+      commandId: command.commandId,
+      sessionId: "session_1",
+      reason: "USER_REQUESTED",
+    });
+    expect(iotClient.start).not.toHaveBeenCalled();
+    expect(command.status).toBe(DeviceCommandStatus.SENT);
+  });
+
   it("persists the 1, 5, and 20 second transport retry schedule without changing command values", async () => {
     const command = createCommand();
     const saves: Array<{
@@ -312,9 +347,7 @@ describe("CommandDispatcherService", () => {
   });
 });
 
-function createCommand(
-  overrides: Partial<DeviceCommand> = {},
-): DeviceCommand {
+function createCommand(overrides: Partial<DeviceCommand> = {}): DeviceCommand {
   const connector = {
     id: randomUUID(),
     code: "ST01-C01",

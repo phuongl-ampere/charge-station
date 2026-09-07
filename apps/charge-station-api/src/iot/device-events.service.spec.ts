@@ -42,6 +42,47 @@ describe("DeviceEventsService", () => {
     expect(harness.events).toHaveLength(2);
   });
 
+  it("publishes persisted session and device updates after a device event commits", async () => {
+    const harness = createHarness(ChargingSessionStatus.STARTING);
+    let transactionCommitted = false;
+    harness.dataSource.transaction.mockImplementation(async (callback) => {
+      const result = await callback(harness.manager);
+      transactionCommitted = true;
+      return result;
+    });
+    const gateway = {
+      publishSession: vi.fn(() => {
+        expect(transactionCommitted).toBe(true);
+      }),
+    };
+    const service = new DeviceEventsService(
+      harness.dataSource as unknown as DataSource,
+      gateway as never,
+    );
+
+    await service.handle(
+      createEvent(harness.command.commandId, harness.session.id, {
+        type: "RUNNING",
+        payload: { relayState: "ON", remainingSeconds: 3600 },
+      }),
+    );
+
+    expect(gateway.publishSession).toHaveBeenCalledWith(
+      harness.session.id,
+      "session.updated",
+      ChargingSessionStatus.CHARGING,
+    );
+    expect(gateway.publishSession).toHaveBeenCalledWith(
+      harness.session.id,
+      "device.updated",
+      expect.objectContaining({
+        type: "RUNNING",
+        lastDeviceEventAt: "2026-09-08T11:00:00.000Z",
+        relayState: "ON",
+      }),
+    );
+  });
+
   it("persists one accepted event when its eventId is delivered twice", async () => {
     const harness = createHarness(ChargingSessionStatus.STARTING);
     const service = new DeviceEventsService(
@@ -311,6 +352,7 @@ function createHarness(status: ChargingSessionStatus) {
     connectorRepository,
     dataSource,
     events,
+    manager,
     session,
     sessionRepository,
   };

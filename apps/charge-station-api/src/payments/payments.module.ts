@@ -9,6 +9,7 @@ import {
   PaymentTransaction,
 } from "../database/data-source.js";
 import { IotModule } from "../iot/iot.module.js";
+import { RealtimeModule } from "../realtime/realtime.module.js";
 import { PayosClient } from "./payos.client.js";
 import { PaymentsController } from "./payments.controller.js";
 import { PaymentsService } from "./payments.service.js";
@@ -16,6 +17,7 @@ import { PaymentsService } from "./payments.service.js";
 @Module({
   imports: [
     IotModule,
+    RealtimeModule,
     TypeOrmModule.forFeature([
       ChargingSession,
       Connector,

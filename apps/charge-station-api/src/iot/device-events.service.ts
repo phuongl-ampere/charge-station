@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  Inject,
+  Optional,
   BadRequestException,
   Injectable,
   NotFoundException,
@@ -21,12 +23,25 @@ import {
   DeviceCommandStatus,
   DeviceEvent,
 } from "../database/data-source.js";
+import { ChargeGateway } from "../realtime/charge.gateway.js";
+
+interface DeviceEventPersistenceResult {
+  accepted: true;
+  duplicate: boolean;
+  sessionStatus?: ChargingSessionStatus;
+  deviceSnapshot?: Record<string, unknown>;
+}
 
 @Injectable()
 export class DeviceEventsService {
   private readonly eventQueues = new Map<string, Promise<void>>();
 
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    @Optional()
+    @Inject(ChargeGateway)
+    private readonly gateway?: ChargeGateway,
+  ) {}
 
   async handle(
     input: unknown,
@@ -54,143 +69,172 @@ export class DeviceEventsService {
   private async handleSerialized(
     event: DeviceEventContract,
   ): Promise<{ accepted: true; duplicate: boolean }> {
-    return this.dataSource.transaction(async (manager) => {
-      const sessionId = await lockChargingSessionId(manager, event.sessionId);
-      if (!sessionId) {
-        throw new NotFoundException("Charging session not found");
-      }
-
-      const sessionRepository = manager.getRepository(ChargingSession);
-      const commandRepository = manager.getRepository(DeviceCommand);
-      const connectorRepository = manager.getRepository(Connector);
-      const eventRepository = manager.getRepository(DeviceEvent);
-      const session = await sessionRepository.findOneBy({ id: sessionId });
-      if (!session) {
-        throw new NotFoundException("Charging session not found");
-      }
-
-      const duplicate = await eventRepository.findOneBy({
-        eventId: event.eventId,
-      });
-      if (duplicate) {
-        return { accepted: true, duplicate: true };
-      }
-
-      const command = await commandRepository.findOne({
-        where: { commandId: event.commandId },
-        relations: { session: true },
-      });
-      if (!command || command.session.id !== session.id) {
-        throw new BadRequestException("Device event does not match a command");
-      }
-      if (
-        session.connector.code !== event.connectorCode ||
-        command.payload.deviceId !== event.deviceId
-      ) {
-        throw new BadRequestException(
-          "Device event does not match its session",
-        );
-      }
-
-      const occurredAt = new Date(event.occurredAt);
-      const storedEvent = eventRepository.create({
-        id: randomUUID(),
-        eventId: event.eventId,
-        session,
-        command,
-        deviceId: event.deviceId,
-        connectorCode: event.connectorCode,
-        eventType: event.type,
-        occurredAt,
-        payload: payloadForPersistence(event, occurredAt),
-        processedAt: new Date(),
-      });
-
-      let saveSession = false;
-      let saveCommand = false;
-      let saveConnector = false;
-      const isFreshDeviceEvent =
-        !session.lastDeviceEventAt ||
-        occurredAt.valueOf() > session.lastDeviceEventAt.valueOf();
-      if (isFreshDeviceEvent) {
-        session.lastDeviceEventAt = occurredAt;
-        saveSession = true;
-      }
-      switch (event.type) {
-        case "COMMAND_ACCEPTED":
-          if (session.status === ChargingSessionStatus.PENDING) {
-            session.status = ChargingSessionStatus.STARTING;
-            saveSession = true;
+    const result =
+      await this.dataSource.transaction<DeviceEventPersistenceResult>(
+        async (manager) => {
+          const sessionId = await lockChargingSessionId(
+            manager,
+            event.sessionId,
+          );
+          if (!sessionId) {
+            throw new NotFoundException("Charging session not found");
           }
-          if (command.status !== DeviceCommandStatus.ACCEPTED) {
-            command.status = DeviceCommandStatus.ACCEPTED;
-            command.acknowledgedAt = occurredAt;
-            saveCommand = true;
+
+          const sessionRepository = manager.getRepository(ChargingSession);
+          const commandRepository = manager.getRepository(DeviceCommand);
+          const connectorRepository = manager.getRepository(Connector);
+          const eventRepository = manager.getRepository(DeviceEvent);
+          const session = await sessionRepository.findOneBy({ id: sessionId });
+          if (!session) {
+            throw new NotFoundException("Charging session not found");
           }
-          break;
-        case "RUNNING":
-          if (session.status === ChargingSessionStatus.STARTING) {
-            session.status = ChargingSessionStatus.CHARGING;
-            session.startedAt = occurredAt;
-            saveSession = true;
+
+          const duplicate = await eventRepository.findOneBy({
+            eventId: event.eventId,
+          });
+          if (duplicate) {
+            return { accepted: true, duplicate: true };
           }
-          break;
-        case "HEARTBEAT":
-          if (isFreshDeviceEvent) {
-            session.estimatedRemainingSeconds = readRemainingSeconds(
-              event.payload,
+
+          const command = await commandRepository.findOne({
+            where: { commandId: event.commandId },
+            relations: { session: true },
+          });
+          if (!command || command.session.id !== session.id) {
+            throw new BadRequestException(
+              "Device event does not match a command",
             );
-            session.operationalWarning = null;
-            saveSession = true;
           }
-          break;
-        case "STOPPED":
-          if (isNonterminalSessionStatus(session.status)) {
-            session.status =
-              event.payload.reason === "TIMER_EXPIRED"
-                ? ChargingSessionStatus.COMPLETED
-                : ChargingSessionStatus.CANCELLED;
-            session.stoppedAt = occurredAt;
-            saveSession = true;
-          }
-          if (session.connector.status !== ConnectorStatus.AVAILABLE) {
-            session.connector.status = ConnectorStatus.AVAILABLE;
-            saveConnector = true;
-          }
-          break;
-        case "COMMAND_FAILED":
           if (
-            session.status === ChargingSessionStatus.PENDING ||
-            session.status === ChargingSessionStatus.STARTING
+            session.connector.code !== event.connectorCode ||
+            command.payload.deviceId !== event.deviceId
           ) {
-            session.status = ChargingSessionStatus.START_FAILED;
-            saveSession = true;
+            throw new BadRequestException(
+              "Device event does not match its session",
+            );
           }
-          if (command.status !== DeviceCommandStatus.FAILED) {
-            command.status = DeviceCommandStatus.FAILED;
-            saveCommand = true;
-          }
-          break;
-        case "DEVICE_OFFLINE":
-          if (isFreshDeviceEvent) {
-            session.operationalWarning = "DEVICE_OFFLINE";
-            saveSession = true;
-          }
-          break;
-      }
 
-      if (saveSession) {
-        await sessionRepository.save(session);
-      }
-      if (saveCommand) {
-        await commandRepository.save(command);
-      }
-      if (saveConnector) {
-        await connectorRepository.save(session.connector);
-      }
-      await eventRepository.save(storedEvent);
-      return { accepted: true, duplicate: false };
-    });
+          const occurredAt = new Date(event.occurredAt);
+          const storedEvent = eventRepository.create({
+            id: randomUUID(),
+            eventId: event.eventId,
+            session,
+            command,
+            deviceId: event.deviceId,
+            connectorCode: event.connectorCode,
+            eventType: event.type,
+            occurredAt,
+            payload: payloadForPersistence(event, occurredAt),
+            processedAt: new Date(),
+          });
+
+          let saveSession = false;
+          let saveCommand = false;
+          let saveConnector = false;
+          const isFreshDeviceEvent =
+            !session.lastDeviceEventAt ||
+            occurredAt.valueOf() > session.lastDeviceEventAt.valueOf();
+          if (isFreshDeviceEvent) {
+            session.lastDeviceEventAt = occurredAt;
+            saveSession = true;
+          }
+          switch (event.type) {
+            case "COMMAND_ACCEPTED":
+              if (session.status === ChargingSessionStatus.PENDING) {
+                session.status = ChargingSessionStatus.STARTING;
+                saveSession = true;
+              }
+              if (command.status !== DeviceCommandStatus.ACCEPTED) {
+                command.status = DeviceCommandStatus.ACCEPTED;
+                command.acknowledgedAt = occurredAt;
+                saveCommand = true;
+              }
+              break;
+            case "RUNNING":
+              if (session.status === ChargingSessionStatus.STARTING) {
+                session.status = ChargingSessionStatus.CHARGING;
+                session.startedAt = occurredAt;
+                saveSession = true;
+              }
+              break;
+            case "HEARTBEAT":
+              if (isFreshDeviceEvent) {
+                session.estimatedRemainingSeconds = readRemainingSeconds(
+                  event.payload,
+                );
+                session.operationalWarning = null;
+                saveSession = true;
+              }
+              break;
+            case "STOPPED":
+              if (isNonterminalSessionStatus(session.status)) {
+                session.status =
+                  event.payload.reason === "TIMER_EXPIRED"
+                    ? ChargingSessionStatus.COMPLETED
+                    : ChargingSessionStatus.CANCELLED;
+                session.stoppedAt = occurredAt;
+                saveSession = true;
+              }
+              if (session.connector.status !== ConnectorStatus.AVAILABLE) {
+                session.connector.status = ConnectorStatus.AVAILABLE;
+                saveConnector = true;
+              }
+              break;
+            case "COMMAND_FAILED":
+              if (
+                session.status === ChargingSessionStatus.PENDING ||
+                session.status === ChargingSessionStatus.STARTING
+              ) {
+                session.status = ChargingSessionStatus.START_FAILED;
+                saveSession = true;
+              }
+              if (command.status !== DeviceCommandStatus.FAILED) {
+                command.status = DeviceCommandStatus.FAILED;
+                saveCommand = true;
+              }
+              break;
+            case "DEVICE_OFFLINE":
+              if (isFreshDeviceEvent) {
+                session.operationalWarning = "DEVICE_OFFLINE";
+                saveSession = true;
+              }
+              break;
+          }
+
+          if (saveSession) {
+            await sessionRepository.save(session);
+          }
+          if (saveCommand) {
+            await commandRepository.save(command);
+          }
+          if (saveConnector) {
+            await connectorRepository.save(session.connector);
+          }
+          await eventRepository.save(storedEvent);
+          return {
+            accepted: true,
+            duplicate: false,
+            sessionStatus: session.status,
+            deviceSnapshot: {
+              type: event.type,
+              ...storedEvent.payload,
+            },
+          };
+        },
+      );
+    if (!result.duplicate && result.sessionStatus && result.deviceSnapshot) {
+      this.gateway?.publishSession(
+        event.sessionId,
+        "session.updated",
+        result.sessionStatus,
+      );
+      this.gateway?.publishSession(
+        event.sessionId,
+        "device.updated",
+        result.deviceSnapshot,
+      );
+    }
+    return { accepted: true, duplicate: result.duplicate };
   }
 }
 
