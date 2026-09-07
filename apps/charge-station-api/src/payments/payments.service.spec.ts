@@ -179,6 +179,92 @@ describe("PaymentsService webhook processing", () => {
     expect(payosClient.createPaymentLink).toHaveBeenCalledOnce();
   });
 
+  it("compensates an invalid PayOS payment-link response", async () => {
+    const connector = {
+      id: randomUUID(),
+      code: "ST01-C01",
+      status: "AVAILABLE",
+      pricingPlan: {
+        hourlyPriceVnd: 5000,
+        allowedDurationsMinutes: [60],
+      },
+    } as Connector;
+    let savedOrder: Order | undefined;
+    let savedPayment: PaymentTransaction | undefined;
+    const connectorRepository = {
+      findOne: vi.fn().mockResolvedValue(connector),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const orderRepository = {
+      create: vi.fn().mockImplementation((entity) => ({
+        ...entity,
+        payosOrderCode: "100001",
+      })),
+      save: vi.fn().mockImplementation(async (entity) => {
+        savedOrder = entity;
+        return entity;
+      }),
+    };
+    const paymentRepository = {
+      create: vi.fn().mockImplementation((entity) => entity),
+      findOne: vi.fn().mockImplementation(async () => savedPayment),
+      save: vi.fn().mockImplementation(async (entity) => {
+        savedPayment = entity;
+        return entity;
+      }),
+    };
+    const manager = {
+      query: vi.fn().mockImplementation(async (query: string) => {
+        if (query.includes("FROM connectors")) {
+          return [{ id: connector.id }];
+        }
+        if (query.includes("FROM payment_transactions")) {
+          return [{ id: savedPayment?.id }];
+        }
+        throw new Error("Unexpected lock query");
+      }),
+      getRepository: vi.fn((entity) => {
+        if (entity === Connector) return connectorRepository;
+        if (entity === Order) return orderRepository;
+        if (entity === PaymentTransaction) return paymentRepository;
+        throw new Error("Unexpected repository");
+      }),
+    };
+    const dataSource = {
+      transaction: vi.fn(async (callback) => callback(manager)),
+    };
+    const payosClient = {
+      returnUrl: "http://localhost:5173/charge/return",
+      cancelUrl: "http://localhost:5173/charge/cancel",
+      createPaymentLink: vi.fn().mockResolvedValue({
+        checkoutUrl: "",
+        paymentLinkId: "",
+      }),
+    };
+    const service = new PaymentsService(
+      dataSource as unknown as DataSource,
+      payosClient as unknown as PayosClient,
+    );
+
+    await expect(
+      service.createOrder({
+        connectorCode: connector.code,
+        durationMinutes: 60,
+      }),
+    ).rejects.toThrow("PayOS returned an invalid payment link");
+
+    expect(savedPayment).toMatchObject({
+      status: PaymentTransactionStatus.FAILED,
+      checkoutUrl: null,
+      paymentLinkId: null,
+    });
+    expect(savedOrder).toMatchObject({
+      status: OrderStatus.PAYMENT_FAILED,
+    });
+    expect(connector.status).toBe("AVAILABLE");
+    expect(dataSource.transaction).toHaveBeenCalledTimes(2);
+  });
+
   it("reconciles a created PayOS link after its first persistence transaction fails", async () => {
     const connector = {
       id: randomUUID(),

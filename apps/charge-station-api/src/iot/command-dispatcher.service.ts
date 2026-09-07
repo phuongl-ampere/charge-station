@@ -4,6 +4,7 @@ import {
   Logger,
   NotFoundException,
   OnApplicationBootstrap,
+  OnApplicationShutdown,
   Optional,
 } from "@nestjs/common";
 import { InjectDataSource } from "@nestjs/typeorm";
@@ -29,6 +30,7 @@ import {
 } from "./iot-service.client.js";
 
 const RETRY_DELAYS_MS = [1_000, 5_000, 20_000] as const;
+const IOT_READINESS_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 5_000] as const;
 
 class DefinitiveStartCommandError extends Error {
   constructor() {
@@ -37,8 +39,13 @@ class DefinitiveStartCommandError extends Error {
 }
 
 @Injectable()
-export class CommandDispatcherService implements OnApplicationBootstrap {
+export class CommandDispatcherService
+  implements OnApplicationBootstrap, OnApplicationShutdown
+{
   private readonly logger = new Logger(CommandDispatcherService.name);
+  private readinessProbeStarted = false;
+  private readinessRecoveryDispatched = false;
+  private readinessRetryTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
@@ -52,14 +59,21 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
     // Pending command recovery begins only after the HTTP listener is ready.
   }
 
+  onApplicationShutdown(): void {
+    if (this.readinessRetryTimer) {
+      clearTimeout(this.readinessRetryTimer);
+      this.readinessRetryTimer = undefined;
+    }
+  }
+
   dispatchPendingAfterReady(): void {
+    if (this.readinessProbeStarted || this.readinessRecoveryDispatched) {
+      return;
+    }
+
+    this.readinessProbeStarted = true;
     queueMicrotask(() => {
-      void this.dispatchPending().catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        this.logger.error(
-          `Unable to dispatch pending IoT commands: ${message}`,
-        );
-      });
+      void this.probeIotReadiness(0);
     });
   }
 
@@ -304,6 +318,41 @@ export class CommandDispatcherService implements OnApplicationBootstrap {
         result.status,
       );
     }
+  }
+
+  private async probeIotReadiness(attempt: number): Promise<void> {
+    let healthy = false;
+    try {
+      healthy = await this.iotServiceClient.isHealthy();
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Unable to probe IoT Service health: ${message}`);
+    }
+
+    if (!healthy) {
+      this.scheduleIotReadinessProbe(attempt);
+      return;
+    }
+
+    this.readinessRetryTimer = undefined;
+    this.readinessRecoveryDispatched = true;
+    try {
+      await this.dispatchPending();
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Unable to dispatch pending IoT commands: ${message}`);
+    }
+  }
+
+  private scheduleIotReadinessProbe(attempt: number): void {
+    const delayIndex = Math.min(
+      attempt,
+      IOT_READINESS_RETRY_DELAYS_MS.length - 1,
+    );
+    this.readinessRetryTimer = setTimeout(() => {
+      this.readinessRetryTimer = undefined;
+      void this.probeIotReadiness(delayIndex + 1);
+    }, IOT_READINESS_RETRY_DELAYS_MS[delayIndex]);
   }
 
   private async dispatchPending(): Promise<void> {

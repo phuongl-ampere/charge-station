@@ -12,7 +12,9 @@ import {
   entities,
   migrations,
   Order,
+  OrderStatus,
   PaymentTransaction,
+  PaymentTransactionStatus,
   PricingPlan,
   Station,
 } from '../database/data-source.js';
@@ -67,6 +69,13 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
       station,
       pricingPlan,
     });
+    await dataSource.getRepository(Connector).save({
+      id: randomUUID(),
+      code: 'ST01-C02',
+      status: ConnectorStatus.AVAILABLE,
+      station,
+      pricingPlan,
+    });
 
     payosClient = new PayosClient({
       mode: 'mock',
@@ -88,6 +97,46 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
       await adminDataSource.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
       await adminDataSource.destroy();
     }
+  });
+
+  it('compensates a rejected provider link and allows the connector to be ordered again', async () => {
+    const createPaymentLink = vi
+      .spyOn(payosClient, 'createPaymentLink')
+      .mockRejectedValueOnce(new Error('PayOS provider unavailable'));
+
+    await expect(
+      paymentsService.createOrder({
+        connectorCode: 'ST01-C02',
+        durationMinutes: 60,
+      }),
+    ).rejects.toThrow('PayOS provider unavailable');
+
+    const failedPayment = await dataSource
+      .getRepository(PaymentTransaction)
+      .findOneOrFail({
+        where: { order: { connector: { code: 'ST01-C02' } } },
+        relations: { order: { connector: true } },
+      });
+
+    expect(failedPayment.status).toBe(PaymentTransactionStatus.FAILED);
+    expect(failedPayment.checkoutUrl).toBeNull();
+    expect(failedPayment.order.status).toBe(OrderStatus.PAYMENT_FAILED);
+    expect(failedPayment.order.connector.status).toBe(
+      ConnectorStatus.AVAILABLE,
+    );
+
+    await expect(
+      paymentsService.createOrder({
+        connectorCode: 'ST01-C02',
+        durationMinutes: 60,
+      }),
+    ).resolves.toMatchObject({
+      payment: {
+        provider: 'PAYOS',
+        checkoutUrl: expect.any(String),
+      },
+    });
+    expect(createPaymentLink).toHaveBeenCalledTimes(2);
   });
 
   it('allows exactly one concurrent pending order to reserve a connector', async () => {
@@ -115,7 +164,11 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
       results.filter((result) => result.status === 'rejected'),
     ).toHaveLength(1);
     createdOrderId = successfulResult!.value.orderId;
-    expect(await dataSource.getRepository(Order).count()).toBe(1);
+    expect(
+      await dataSource.getRepository(Order).count({
+        where: { connector: { code: 'ST01-C01' } },
+      }),
+    ).toBe(1);
     expect(
       (
         await dataSource
@@ -147,7 +200,11 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
       paymentsService.handleWebhook(body),
     ]);
 
-    expect(await dataSource.getRepository(PaymentTransaction).count()).toBe(1);
+    expect(
+      await dataSource.getRepository(PaymentTransaction).count({
+        where: { order: { id: order.id } },
+      }),
+    ).toBe(1);
     expect(
       await dataSource
         .getRepository(ChargingSession)

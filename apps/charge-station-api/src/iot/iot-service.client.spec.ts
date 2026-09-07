@@ -82,6 +82,40 @@ describe("IotServiceClient", () => {
     );
   });
 
+  it("probes the configured local IoT health endpoint", async () => {
+    process.env.IOT_SERVICE_URL = "http://iot-service:4001/api";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(new IotServiceClient().isHealthy()).resolves.toBe(true);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://iot-service:4001/api/health",
+      expect.objectContaining({
+        method: "GET",
+        redirect: "error",
+      }),
+    );
+  });
+
+  it("treats an unavailable local IoT health endpoint as not ready", async () => {
+    process.env.IOT_SERVICE_URL = "http://iot-service:4001";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(null, {
+          status: 503,
+        }),
+      ),
+    );
+
+    await expect(new IotServiceClient().isHealthy()).resolves.toBe(false);
+  });
+
   it("rejects a non-local IoT service URL before making a request", async () => {
     process.env.IOT_SERVICE_URL = "https://iot.example.test";
     process.env.SERVICE_TOKEN = "local-token";

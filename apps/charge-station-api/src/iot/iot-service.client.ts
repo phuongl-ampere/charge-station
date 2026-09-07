@@ -5,6 +5,8 @@ import type {
   StopChargingCommand,
 } from "@charge-station/contracts";
 
+const HEALTH_PROBE_TIMEOUT_MS = 1_000;
+
 @Injectable()
 export class IotServiceClient {
   async start(command: StartChargingCommand): Promise<void> {
@@ -13,6 +15,20 @@ export class IotServiceClient {
 
   async stop(command: StopChargingCommand): Promise<void> {
     await this.send(command, "stop");
+  }
+
+  async isHealthy(): Promise<boolean> {
+    const endpoint = this.serviceEndpoint("health");
+    try {
+      const response = await fetch(endpoint, {
+        method: "GET",
+        redirect: "error",
+        signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
   }
 
   private async send(
@@ -68,6 +84,10 @@ export class IotServiceClient {
   }
 
   private commandEndpoint(action: "start" | "stop"): string {
+    return this.serviceEndpoint(`internal/commands/${action}`);
+  }
+
+  private serviceEndpoint(path: string): string {
     const configuredUrl = process.env.IOT_SERVICE_URL;
     if (!configuredUrl) {
       throw new Error("IOT_SERVICE_URL must be configured");
@@ -97,7 +117,7 @@ export class IotServiceClient {
       throw new Error("IOT_SERVICE_URL must use a local service destination");
     }
 
-    baseUrl.pathname = `${baseUrl.pathname.replace(/\/+$/, "")}/internal/commands/${action}`;
+    baseUrl.pathname = `${baseUrl.pathname.replace(/\/+$/, "")}/${path}`;
     baseUrl.search = "";
     baseUrl.hash = "";
     return baseUrl.toString();

@@ -281,7 +281,7 @@ describe("CommandDispatcherService", () => {
     expect(commandRepository.find).not.toHaveBeenCalled();
   });
 
-  it("dispatches pending IoT commands asynchronously after server readiness", async () => {
+  it("retries the post-listen IoT readiness probe before dispatching pending commands", async () => {
     const command = createCommand();
     const commandRepository = {
       find: vi.fn().mockResolvedValue([command]),
@@ -289,23 +289,101 @@ describe("CommandDispatcherService", () => {
     const dataSource = {
       getRepository: vi.fn().mockReturnValue(commandRepository),
     };
+    const iotClient = {
+      isHealthy: vi
+        .fn()
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true),
+    };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      {} as IotServiceClient,
+      iotClient as unknown as IotServiceClient,
     );
     const dispatch = vi.spyOn(service, "dispatch").mockResolvedValue(undefined);
     const readyDispatcher = service as unknown as {
       dispatchPendingAfterReady(): void;
     };
 
-    readyDispatcher.dispatchPendingAfterReady();
+    vi.useFakeTimers();
+    try {
+      readyDispatcher.dispatchPendingAfterReady();
+      await Promise.resolve();
+      await Promise.resolve();
 
-    expect(commandRepository.find).not.toHaveBeenCalled();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(commandRepository.find).toHaveBeenCalledWith({
-      where: { status: DeviceCommandStatus.PENDING },
-    });
-    expect(dispatch).toHaveBeenCalledWith(command.commandId);
+      expect(iotClient.isHealthy).toHaveBeenCalledTimes(1);
+      expect(commandRepository.find).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(iotClient.isHealthy).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(iotClient.isHealthy).toHaveBeenCalledTimes(2);
+      expect(commandRepository.find).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(499);
+      expect(iotClient.isHealthy).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(iotClient.isHealthy).toHaveBeenCalledTimes(3);
+      expect(commandRepository.find).toHaveBeenCalledWith({
+        where: { status: DeviceCommandStatus.PENDING },
+      });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledWith(command.commandId);
+      expect(command.retryCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a pending start command at retry zero until the Compose IoT dependency is healthy", async () => {
+    const command = createCommand();
+    const commandRepository = {
+      find: vi.fn().mockResolvedValue([command]),
+      findOne: vi.fn().mockResolvedValue(command),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const dataSource = {
+      getRepository: vi.fn().mockReturnValue(commandRepository),
+    };
+    const iotClient = {
+      isHealthy: vi
+        .fn()
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true),
+      start: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new CommandDispatcherService(
+      dataSource as unknown as DataSource,
+      iotClient as unknown as IotServiceClient,
+    );
+    const readyDispatcher = service as unknown as {
+      dispatchPendingAfterReady(): void;
+    };
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-08T11:00:00.000Z"));
+    try {
+      readyDispatcher.dispatchPendingAfterReady();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(command.retryCount).toBe(0);
+      expect(command.status).toBe(DeviceCommandStatus.PENDING);
+      expect(commandRepository.find).not.toHaveBeenCalled();
+      expect(iotClient.start).not.toHaveBeenCalled();
+      expect(commandRepository.save).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(iotClient.isHealthy).toHaveBeenCalledTimes(2);
+      expect(iotClient.start).toHaveBeenCalledTimes(1);
+      expect(command.retryCount).toBe(0);
+      expect(command.status).toBe(DeviceCommandStatus.SENT);
+      expect(commandRepository.save).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("marks configuration failures failed without retrying", async () => {

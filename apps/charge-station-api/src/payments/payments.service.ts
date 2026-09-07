@@ -72,13 +72,7 @@ export class PaymentsService {
     }
 
     const reservation = await this.reservePaymentLink(input);
-    const paymentLink = await this.payosClient.createPaymentLink({
-      amount: reservation.amount,
-      orderCode: reservation.orderCode,
-      description: reservation.description,
-      returnUrl: this.payosClient.returnUrl,
-      cancelUrl: this.payosClient.cancelUrl,
-    });
+    const paymentLink = await this.createPaymentLink(reservation);
     try {
       await this.persistPaymentLink(reservation.paymentId, paymentLink);
     } catch (error: unknown) {
@@ -134,6 +128,27 @@ export class PaymentsService {
       provider: "PAYOS",
       checkoutUrl: paymentLink.checkoutUrl,
     };
+  }
+
+  private async createPaymentLink(
+    reservation: PaymentLinkReservation,
+  ): Promise<PaymentLink> {
+    try {
+      const paymentLink = await this.payosClient.createPaymentLink({
+        amount: reservation.amount,
+        orderCode: reservation.orderCode,
+        description: reservation.description,
+        returnUrl: this.payosClient.returnUrl,
+        cancelUrl: this.payosClient.cancelUrl,
+      });
+      if (!isPaymentLink(paymentLink)) {
+        throw new Error("PayOS returned an invalid payment link");
+      }
+      return paymentLink;
+    } catch (error: unknown) {
+      await this.failPaymentLinkReservation(reservation.paymentId);
+      throw error;
+    }
   }
 
   private async reservePaymentLink(
@@ -218,6 +233,48 @@ export class PaymentsService {
           input.durationMinutes,
         ),
       };
+    });
+  }
+
+  private async failPaymentLinkReservation(paymentId: string): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const paymentRepository = manager.getRepository(PaymentTransaction);
+      const orderRepository = manager.getRepository(Order);
+      const connectorRepository = manager.getRepository(Connector);
+      const lockedPaymentId = await lockPaymentIdById(manager, paymentId);
+      const payment = lockedPaymentId
+        ? await paymentRepository.findOne({
+            where: { id: lockedPaymentId },
+            relations: { order: { connector: true } },
+          })
+        : null;
+      if (!payment) {
+        throw new NotFoundException("Payment not found");
+      }
+      if (
+        payment.status !== PaymentTransactionStatus.PENDING ||
+        payment.checkoutUrl
+      ) {
+        return;
+      }
+
+      const connectorId = await lockConnectorIdById(
+        manager,
+        payment.order.connector.id,
+      );
+      const connector = connectorId
+        ? await connectorRepository.findOne({ where: { id: connectorId } })
+        : null;
+      if (!connector) {
+        throw new NotFoundException("Connector not found");
+      }
+
+      payment.status = PaymentTransactionStatus.FAILED;
+      payment.order.status = OrderStatus.PAYMENT_FAILED;
+      connector.status = ConnectorStatus.AVAILABLE;
+      await orderRepository.save(payment.order);
+      await paymentRepository.save(payment);
+      await connectorRepository.save(connector);
     });
   }
 
@@ -547,6 +604,19 @@ async function lockPaymentIdById(
     [paymentId],
   );
   return rows[0]?.id ?? null;
+}
+
+function isPaymentLink(value: unknown): value is PaymentLink {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "checkoutUrl" in value &&
+    typeof value.checkoutUrl === "string" &&
+    value.checkoutUrl.length > 0 &&
+    "paymentLinkId" in value &&
+    typeof value.paymentLinkId === "string" &&
+    value.paymentLinkId.length > 0
+  );
 }
 
 function parsePositiveOrderCode(value: unknown): number {
