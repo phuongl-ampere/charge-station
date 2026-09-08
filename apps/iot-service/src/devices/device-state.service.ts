@@ -1,7 +1,5 @@
 import { Injectable, type OnModuleDestroy } from "@nestjs/common";
-import type {
-  StartChargingCommand,
-} from "@charge-station/contracts";
+import type { StartChargingCommand } from "@charge-station/contracts";
 
 export type DeviceRuntimeStatus = "STARTING" | "RUNNING" | "STOPPED";
 export type RelayState = "ON" | "OFF";
@@ -107,5 +105,4 @@ export class DeviceStateService implements OnModuleDestroy {
     this.connectors.clear();
     this.stopResponses.clear();
   }
-
 }

@@ -87,10 +87,7 @@ export class CommandDispatcherService
   }
 
   dispatchPendingAfterReady(): void {
-    if (
-      this.readinessRecoveryRequested ||
-      this.readinessRecoveryDispatched
-    ) {
+    if (this.readinessRecoveryRequested || this.readinessRecoveryDispatched) {
       return;
     }
 
@@ -256,13 +253,11 @@ export class CommandDispatcherService
         const retryCount = command.retryCount + 1;
         const nextAttemptAt = new Date(Date.now() + delayMs);
         if (
-          !(
-            await this.updateClaimedCommand(commandRepository, command, claim, {
-              status: DeviceCommandStatus.PENDING,
-              retryCount,
-              nextAttemptAt,
-            })
-          )
+          !(await this.updateClaimedCommand(commandRepository, command, claim, {
+            status: DeviceCommandStatus.PENDING,
+            retryCount,
+            nextAttemptAt,
+          }))
         ) {
           this.clearClaimRecovery(command.commandId, claim.token);
           return;
@@ -283,7 +278,11 @@ export class CommandDispatcherService
         error instanceof IotCommandRejectedError &&
         command.commandType === "START_CHARGING"
       ) {
-        await this.markDefinitiveStartFailure(command, commandRepository, claim);
+        await this.markDefinitiveStartFailure(
+          command,
+          commandRepository,
+          claim,
+        );
       } else {
         await this.markFailed(command, commandRepository, claim);
       }
@@ -384,15 +383,12 @@ export class CommandDispatcherService
     if (command.dispatchClaimToken) {
       criteria.dispatchClaimToken = command.dispatchClaimToken;
     }
-    const result = await commandRepository.update(
-      criteria,
-      {
-        status: DeviceCommandStatus.PENDING,
-        dispatchClaimToken: null,
-        dispatchClaimedAt: null,
-        dispatchVersion: incrementDispatchVersion(),
-      } as never,
-    );
+    const result = await commandRepository.update(criteria, {
+      status: DeviceCommandStatus.PENDING,
+      dispatchClaimToken: null,
+      dispatchClaimedAt: null,
+      dispatchVersion: incrementDispatchVersion(),
+    } as never);
     if (result.affected === 1) {
       this.clearClaimRecovery(
         command.commandId,
@@ -403,10 +399,7 @@ export class CommandDispatcherService
     return false;
   }
 
-  private scheduleClaimRecovery(
-    commandId: string,
-    claim: DispatchClaim,
-  ): void {
+  private scheduleClaimRecovery(commandId: string, claim: DispatchClaim): void {
     this.clearClaimRecovery(commandId);
     const delayMs = Math.max(
       0,
@@ -522,37 +515,27 @@ export class CommandDispatcherService
         command.session.id,
       );
       if (!sessionId) {
-        await this.markFailed(
-          command,
-          transactionalCommandRepository,
-          claim,
-        );
+        await this.markFailed(command, transactionalCommandRepository, claim);
         return null;
       }
 
       const sessionRepository = manager.getRepository(ChargingSession);
       const session = await sessionRepository.findOneBy({ id: sessionId });
       if (!session) {
-        await this.markFailed(
-          command,
-          transactionalCommandRepository,
-          claim,
-        );
+        await this.markFailed(command, transactionalCommandRepository, claim);
         return null;
       }
 
       if (
-        !(
-          await this.updateClaimedCommand(
-            transactionalCommandRepository,
-            command,
-            claim,
-            {
+        !(await this.updateClaimedCommand(
+          transactionalCommandRepository,
+          command,
+          claim,
+          {
             status: DeviceCommandStatus.FAILED,
             nextAttemptAt: null,
-            },
-          )
-        )
+          },
+        ))
       ) {
         return null;
       }
@@ -600,11 +583,7 @@ export class CommandDispatcherService
         command.session.id,
       );
       if (!sessionId) {
-        await this.markFailed(
-          command,
-          transactionalCommandRepository,
-          claim,
-        );
+        await this.markFailed(command, transactionalCommandRepository, claim);
         return null;
       }
 
@@ -612,26 +591,20 @@ export class CommandDispatcherService
       const connectorRepository = manager.getRepository(Connector);
       const session = await sessionRepository.findOneBy({ id: sessionId });
       if (!session) {
-        await this.markFailed(
-          command,
-          transactionalCommandRepository,
-          claim,
-        );
+        await this.markFailed(command, transactionalCommandRepository, claim);
         return null;
       }
 
       if (
-        !(
-          await this.updateClaimedCommand(
-            transactionalCommandRepository,
-            command,
-            claim,
-            {
+        !(await this.updateClaimedCommand(
+          transactionalCommandRepository,
+          command,
+          claim,
+          {
             status: DeviceCommandStatus.FAILED,
             nextAttemptAt: null,
-            },
-          )
-        )
+          },
+        ))
       ) {
         return null;
       }
@@ -700,7 +673,8 @@ export class CommandDispatcherService
       if (recoverPendingCommands) {
         this.readinessRecoveryDispatched = true;
         await this.dispatchPending().catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           this.logger.error(
             "Unable to recover pending IoT commands: " + message,
           );
@@ -708,7 +682,8 @@ export class CommandDispatcherService
       }
       for (const commandId of commandIds) {
         await this.dispatch(commandId).catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           this.logger.warn(
             "Unable to dispatch ready IoT command " +
               commandId +

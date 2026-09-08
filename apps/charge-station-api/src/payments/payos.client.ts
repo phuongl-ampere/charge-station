@@ -75,10 +75,7 @@ abstract class PayosPaymentLinkCreationError extends Error {
 export class PayosPaymentLinkDefinitiveError extends PayosPaymentLinkCreationError {
   readonly classification = "DEFINITIVE" as const;
 
-  constructor(
-    message: string,
-    options: PayosPaymentLinkErrorOptions = {},
-  ) {
+  constructor(message: string, options: PayosPaymentLinkErrorOptions = {}) {
     super(message, options);
   }
 }
@@ -86,10 +83,7 @@ export class PayosPaymentLinkDefinitiveError extends PayosPaymentLinkCreationErr
 export class PayosPaymentLinkAmbiguousError extends PayosPaymentLinkCreationError {
   readonly classification = "AMBIGUOUS" as const;
 
-  constructor(
-    message: string,
-    options: PayosPaymentLinkErrorOptions = {},
-  ) {
+  constructor(message: string, options: PayosPaymentLinkErrorOptions = {}) {
     super(message, options);
   }
 }
@@ -318,10 +312,7 @@ function classifyPaymentLinkError(
   );
 }
 
-function readPaymentLink(
-  response: unknown,
-  errorMessage: string,
-): PaymentLink {
+function readPaymentLink(response: unknown, errorMessage: string): PaymentLink {
   if (!isPaymentLinkResponse(response)) {
     throw new PayosPaymentLinkDefinitiveError(errorMessage);
   }

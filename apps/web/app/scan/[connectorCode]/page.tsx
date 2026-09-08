@@ -75,7 +75,11 @@ export default function ScanConnectorPage() {
   async function recoverPaymentLink(): Promise<void> {
     const pendingCheckout = checkout;
     const accessToken = pendingCheckout?.realtimeAccessToken;
-    if (!pendingCheckout || pendingCheckout.payment.checkoutUrl || !accessToken) {
+    if (
+      !pendingCheckout ||
+      pendingCheckout.payment.checkoutUrl ||
+      !accessToken
+    ) {
       return;
     }
 

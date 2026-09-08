@@ -115,7 +115,10 @@ async function mockAmbiguousLocalApi(
       method === "GET" &&
       url.pathname === "/orders/ord_ambiguous/payment-link"
     ) {
-      if (route.request().headers()["authorization"] !== "Bearer ambiguous-order-token") {
+      if (
+        route.request().headers()["authorization"] !==
+        "Bearer ambiguous-order-token"
+      ) {
         await route.fulfill({
           contentType: "application/json",
           status: 401,
@@ -133,10 +136,7 @@ async function mockAmbiguousLocalApi(
       });
       return;
     }
-    if (
-      method === "GET" &&
-      url.pathname === "/payments/payos/mock/ambiguous"
-    ) {
+    if (method === "GET" && url.pathname === "/payments/payos/mock/ambiguous") {
       await route.fulfill({
         contentType: "text/html",
         body: "<!doctype html><title>Mock PayOS Checkout</title><h1>Mock PayOS Checkout</h1>",
@@ -156,8 +156,14 @@ async function mockReturnCapabilityApi(
   let sawAuthorizedOrderRead = false;
   await page.context().route("http://localhost:4000/**", async (route) => {
     const url = new URL(route.request().url());
-    if (route.request().method() === "GET" && url.pathname === "/orders/ord_return") {
-      if (route.request().headers()["authorization"] !== "Bearer returned-capability") {
+    if (
+      route.request().method() === "GET" &&
+      url.pathname === "/orders/ord_return"
+    ) {
+      if (
+        route.request().headers()["authorization"] !==
+        "Bearer returned-capability"
+      ) {
         await route.fulfill({
           contentType: "application/json",
           status: 401,
@@ -211,7 +217,9 @@ test("selects a duration, opens local PayOS checkout, and shows payment waiting"
 
   await page.goto("/charge/ord_1");
   await expect
-    .poll(() => page.evaluate(() => window.sessionStorage.getItem("charge-token:ord_1")))
+    .poll(() =>
+      page.evaluate(() => window.sessionStorage.getItem("charge-token:ord_1")),
+    )
     .toBe("local-order-token");
   await expect(
     page.getByRole("heading", { name: "Waiting for payment" }),
@@ -273,7 +281,9 @@ test("stores a PayOS return capability from the fragment before loading charge s
       ),
     )
     .toBe("returned-capability");
-  await expect.poll(() => page.url()).toBe("http://127.0.0.1:3100/charge/ord_return");
+  await expect
+    .poll(() => page.url())
+    .toBe("http://127.0.0.1:3100/charge/ord_return");
   await expect(
     page.getByRole("heading", { name: "Waiting for payment" }),
   ).toBeVisible();

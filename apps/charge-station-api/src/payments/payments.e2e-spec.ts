@@ -1,11 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID } from "node:crypto";
 
-import { Logger, ValidationPipe } from '@nestjs/common';
-import type { INestApplication } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
-import { getDataSourceToken } from '@nestjs/typeorm';
-import { DataType, newDb } from 'pg-mem';
-import request from 'supertest';
+import { Logger, ValidationPipe } from "@nestjs/common";
+import type { INestApplication } from "@nestjs/common";
+import { Test } from "@nestjs/testing";
+import { getDataSourceToken } from "@nestjs/typeorm";
+import { DataType, newDb } from "pg-mem";
+import request from "supertest";
 import {
   afterAll,
   afterEach,
@@ -14,8 +14,8 @@ import {
   expect,
   it,
   vi,
-} from 'vitest';
-import { DataSource } from 'typeorm';
+} from "vitest";
+import { DataSource } from "typeorm";
 
 import {
   ChargingSession,
@@ -30,13 +30,13 @@ import {
   PaymentTransactionStatus,
   PricingPlan,
   Station,
-} from '../database/data-source.js';
-import { PayosClient, type PayosWebhookData } from './payos.client.js';
-import { ChargeGateway } from '../realtime/charge.gateway.js';
-import { PaymentsController } from './payments.controller.js';
-import { PaymentsService } from './payments.service.js';
+} from "../database/data-source.js";
+import { PayosClient, type PayosWebhookData } from "./payos.client.js";
+import { ChargeGateway } from "../realtime/charge.gateway.js";
+import { PaymentsController } from "./payments.controller.js";
+import { PaymentsService } from "./payments.service.js";
 
-describe('PayOS payment API', () => {
+describe("PayOS payment API", () => {
   let app: INestApplication;
   let dataSource: DataSource;
   let payosClient: PayosClient;
@@ -47,20 +47,20 @@ describe('PayOS payment API', () => {
   };
 
   beforeAll(async () => {
-    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, "error").mockImplementation(() => undefined);
     const database = newDb({ autoCreateForeignKeyIndices: true });
     database.public.registerFunction({
-      name: 'version',
+      name: "version",
       returns: DataType.text,
-      implementation: () => 'PostgreSQL 16.0',
+      implementation: () => "PostgreSQL 16.0",
     });
     database.public.registerFunction({
-      name: 'current_database',
+      name: "current_database",
       returns: DataType.text,
-      implementation: () => 'charge_station_test',
+      implementation: () => "charge_station_test",
     });
     dataSource = database.adapters.createTypeormDataSource({
-      type: 'postgres',
+      type: "postgres",
       entities,
       migrations,
       migrationsRun: false,
@@ -70,31 +70,31 @@ describe('PayOS payment API', () => {
 
     const station = await dataSource.getRepository(Station).save({
       id: randomUUID(),
-      code: 'ST01',
-      name: 'Demo Station',
-      deviceId: 'dev_ST01',
+      code: "ST01",
+      name: "Demo Station",
+      deviceId: "dev_ST01",
     });
     const pricingPlan = await dataSource.getRepository(PricingPlan).save({
       id: randomUUID(),
-      name: 'MVP hourly pricing',
+      name: "MVP hourly pricing",
       hourlyPriceVnd: 5000,
       allowedDurationsMinutes: [60, 120, 180],
     });
     await dataSource.getRepository(Connector).save({
       id: randomUUID(),
-      code: 'ST01-C01',
+      code: "ST01-C01",
       status: ConnectorStatus.AVAILABLE,
       station,
       pricingPlan,
     });
 
     payosClient = new PayosClient({
-      mode: 'mock',
-      clientId: 'client-id',
-      apiKey: 'api-key',
-      checksumKey: 'checksum-key',
-      returnUrl: 'http://localhost:5173/charge/return',
-      cancelUrl: 'http://localhost:5173/charge/cancel',
+      mode: "mock",
+      clientId: "client-id",
+      apiKey: "api-key",
+      checksumKey: "checksum-key",
+      returnUrl: "http://localhost:5173/charge/return",
+      cancelUrl: "http://localhost:5173/charge/cancel",
     });
     const module = await Test.createTestingModule({
       controllers: [PaymentsController],
@@ -126,17 +126,17 @@ describe('PayOS payment API', () => {
     await dataSource.query('DELETE FROM "orders"');
     await dataSource
       .getRepository(Connector)
-      .update({ code: 'ST01-C01' }, { status: ConnectorStatus.AVAILABLE });
+      .update({ code: "ST01-C01" }, { status: ConnectorStatus.AVAILABLE });
   });
 
-  it('creates a pending order with a deterministic local checkout URL', async () => {
+  it("creates a pending order with a deterministic local checkout URL", async () => {
     const response = await createOrder();
 
     expect(response.body).toMatchObject({
       amount: 10000,
-      currency: 'VND',
+      currency: "VND",
       payment: {
-        provider: 'PAYOS',
+        provider: "PAYOS",
         checkoutUrl: expect.stringMatching(
           /^http:\/\/localhost:4000\/payments\/payos\/mock\/\d+$/,
         ),
@@ -156,12 +156,12 @@ describe('PayOS payment API', () => {
       (
         await dataSource
           .getRepository(Connector)
-          .findOneByOrFail({ code: 'ST01-C01' })
+          .findOneByOrFail({ code: "ST01-C01" })
       ).status,
     ).toBe(ConnectorStatus.OCCUPIED);
   });
 
-  it('serves a local checkout page that can complete a mock payment', async () => {
+  it("serves a local checkout page that can complete a mock payment", async () => {
     const created = await createOrder();
     const order = await dataSource
       .getRepository(Order)
@@ -170,7 +170,7 @@ describe('PayOS payment API', () => {
 
     await request(app.getHttpServer())
       .get(checkoutPath)
-      .expect('Content-Type', /text\/html/)
+      .expect("Content-Type", /text\/html/)
       .expect(new RegExp(`action="${checkoutPath}/complete"`))
       .expect(new RegExp(`action="${checkoutPath}/cancel"`))
       .expect(200);
@@ -186,7 +186,7 @@ describe('PayOS payment API', () => {
       (
         await dataSource
           .getRepository(Connector)
-          .findOneByOrFail({ code: 'ST01-C01' })
+          .findOneByOrFail({ code: "ST01-C01" })
       ).status,
     ).toBe(ConnectorStatus.OCCUPIED);
     expect(
@@ -196,7 +196,7 @@ describe('PayOS payment API', () => {
     ).toBe(1);
   });
 
-  it('releases a reserved connector when local checkout is cancelled', async () => {
+  it("releases a reserved connector when local checkout is cancelled", async () => {
     const created = await createOrder();
     const checkoutPath = new URL(created.body.payment.checkoutUrl).pathname;
 
@@ -208,13 +208,13 @@ describe('PayOS payment API', () => {
       (
         await dataSource
           .getRepository(Connector)
-          .findOneByOrFail({ code: 'ST01-C01' })
+          .findOneByOrFail({ code: "ST01-C01" })
       ).status,
     ).toBe(ConnectorStatus.AVAILABLE);
     await createOrder();
   });
 
-  it('expires an abandoned local checkout and releases its connector', async () => {
+  it("expires an abandoned local checkout and releases its connector", async () => {
     const created = await createOrder();
     const payment = await dataSource
       .getRepository(PaymentTransaction)
@@ -232,7 +232,7 @@ describe('PayOS payment API', () => {
     const checkoutPath = new URL(created.body.payment.checkoutUrl).pathname;
     await request(app.getHttpServer())
       .get(checkoutPath)
-      .expect('Content-Type', /text\/html/)
+      .expect("Content-Type", /text\/html/)
       .expect(/Payment status: EXPIRED/)
       .expect(200);
     await request(app.getHttpServer())
@@ -247,19 +247,22 @@ describe('PayOS payment API', () => {
       ).status,
     ).toBe(PaymentTransactionStatus.EXPIRED);
     expect(
-      (await dataSource.getRepository(Order).findOneByOrFail({ id: payment.order.id }))
-        .status,
+      (
+        await dataSource
+          .getRepository(Order)
+          .findOneByOrFail({ id: payment.order.id })
+      ).status,
     ).toBe(OrderStatus.EXPIRED);
     expect(
       (
         await dataSource
           .getRepository(Connector)
-          .findOneByOrFail({ code: 'ST01-C01' })
-    ).status,
+          .findOneByOrFail({ code: "ST01-C01" })
+      ).status,
     ).toBe(ConnectorStatus.AVAILABLE);
   });
 
-  it('expires a valid paid webhook at the reservation deadline without creating a session', async () => {
+  it("expires a valid paid webhook at the reservation deadline without creating a session", async () => {
     const created = await createOrder();
     const payment = await dataSource
       .getRepository(PaymentTransaction)
@@ -274,13 +277,13 @@ describe('PayOS payment API', () => {
       orderCode: Number(payment.order.payosOrderCode),
       amount: payment.order.amountVnd,
       paymentLinkId: `mock_${payment.order.payosOrderCode}`,
-      status: 'PAID',
+      status: "PAID",
     };
 
     await request(app.getHttpServer())
-      .post('/payments/payos/webhook')
+      .post("/payments/payos/webhook")
       .send({
-        code: '00',
+        code: "00",
         success: true,
         data,
         signature: payosClient.signWebhook(data),
@@ -295,8 +298,11 @@ describe('PayOS payment API', () => {
       ).status,
     ).toBe(PaymentTransactionStatus.EXPIRED);
     expect(
-      (await dataSource.getRepository(Order).findOneByOrFail({ id: payment.order.id }))
-        .status,
+      (
+        await dataSource
+          .getRepository(Order)
+          .findOneByOrFail({ id: payment.order.id })
+      ).status,
     ).toBe(OrderStatus.EXPIRED);
     expect(
       await dataSource
@@ -307,12 +313,12 @@ describe('PayOS payment API', () => {
       (
         await dataSource
           .getRepository(Connector)
-          .findOneByOrFail({ code: 'ST01-C01' })
+          .findOneByOrFail({ code: "ST01-C01" })
       ).status,
     ).toBe(ConnectorStatus.AVAILABLE);
   });
 
-  it('keeps an expired reservation held when provider cancellation fails and releases it after retry success', async () => {
+  it("keeps an expired reservation held when provider cancellation fails and releases it after retry success", async () => {
     const created = await createOrder();
     const payment = await dataSource
       .getRepository(PaymentTransaction)
@@ -324,8 +330,8 @@ describe('PayOS payment API', () => {
       expiresAt: new Date(Date.now() - 1),
     });
     const cancellation = vi
-      .spyOn(payosClient, 'cancelPaymentLink')
-      .mockRejectedValueOnce(new Error('provider unavailable'))
+      .spyOn(payosClient, "cancelPaymentLink")
+      .mockRejectedValueOnce(new Error("provider unavailable"))
       .mockResolvedValueOnce(undefined);
     const paymentsService = app.get(PaymentsService);
 
@@ -342,11 +348,13 @@ describe('PayOS payment API', () => {
       expect(pending.order.status).toBe(OrderStatus.PENDING_PAYMENT);
       expect(pending.order.connector.status).toBe(ConnectorStatus.OCCUPIED);
       expect(
-        (pending as PaymentTransaction & {
-          cancellationStatus?: string;
-          cancellationAttempts?: number;
-        }).cancellationStatus,
-      ).toBe('PENDING');
+        (
+          pending as PaymentTransaction & {
+            cancellationStatus?: string;
+            cancellationAttempts?: number;
+          }
+        ).cancellationStatus,
+      ).toBe("PENDING");
       expect(
         (pending as PaymentTransaction & { cancellationAttempts?: number })
           .cancellationAttempts,
@@ -370,7 +378,7 @@ describe('PayOS payment API', () => {
     }
   });
 
-  it('processes a provider-reported paid reservation during cancellation reconciliation', async () => {
+  it("processes a provider-reported paid reservation during cancellation reconciliation", async () => {
     const created = await createOrder();
     const payment = await dataSource
       .getRepository(PaymentTransaction)
@@ -382,17 +390,17 @@ describe('PayOS payment API', () => {
       expiresAt: new Date(Date.now() - 1),
     });
     const cancellation = vi
-      .spyOn(payosClient, 'cancelPaymentLink')
-      .mockRejectedValueOnce(new Error('provider cancellation timed out'));
+      .spyOn(payosClient, "cancelPaymentLink")
+      .mockRejectedValueOnce(new Error("provider cancellation timed out"));
     const provider = payosClient as unknown as {
       getPaymentLinkStatus: (orderCode: number) => Promise<unknown>;
     };
     const providerStatus = vi.fn().mockResolvedValue({
-      status: 'PAID',
+      status: "PAID",
       amount: payment.order.amountVnd,
       paymentLinkId: `mock_${payment.order.payosOrderCode}`,
     });
-    Object.defineProperty(provider, 'getPaymentLinkStatus', {
+    Object.defineProperty(provider, "getPaymentLinkStatus", {
       configurable: true,
       value: providerStatus,
     });
@@ -423,11 +431,12 @@ describe('PayOS payment API', () => {
       );
     } finally {
       cancellation.mockRestore();
-      delete (provider as { getPaymentLinkStatus?: unknown }).getPaymentLinkStatus;
+      delete (provider as { getPaymentLinkStatus?: unknown })
+        .getPaymentLinkStatus;
     }
   });
 
-  it('marks a signed paid webhook once and creates one session and start command', async () => {
+  it("marks a signed paid webhook once and creates one session and start command", async () => {
     const created = await createOrder();
     const order = await dataSource
       .getRepository(Order)
@@ -436,21 +445,21 @@ describe('PayOS payment API', () => {
       orderCode: Number(order.payosOrderCode),
       amount: order.amountVnd,
       paymentLinkId: `mock_${order.payosOrderCode}`,
-      status: 'PAID',
+      status: "PAID",
     };
     const body = {
-      code: '00',
+      code: "00",
       success: true,
       data,
       signature: payosClient.signWebhook(data),
     };
 
     await request(app.getHttpServer())
-      .post('/payments/payos/webhook')
+      .post("/payments/payos/webhook")
       .send(body)
       .expect(201);
     await request(app.getHttpServer())
-      .post('/payments/payos/webhook')
+      .post("/payments/payos/webhook")
       .send(body)
       .expect(201);
 
@@ -466,7 +475,7 @@ describe('PayOS payment API', () => {
     ).toBe(OrderStatus.PAID);
   });
 
-  it('rejects invalid signatures, unknown orders, and amount mismatches without starting charging', async () => {
+  it("rejects invalid signatures, unknown orders, and amount mismatches without starting charging", async () => {
     const beforeSessions = await dataSource
       .getRepository(ChargingSession)
       .count();
@@ -480,31 +489,31 @@ describe('PayOS payment API', () => {
     const validData: PayosWebhookData = {
       orderCode: Number(order.payosOrderCode),
       amount: order.amountVnd,
-      status: 'PAID',
+      status: "PAID",
     };
 
     await request(app.getHttpServer())
-      .post('/payments/payos/webhook')
+      .post("/payments/payos/webhook")
       .send({
-        code: '00',
+        code: "00",
         success: true,
         data: validData,
-        signature: 'not-valid',
+        signature: "not-valid",
       })
       .expect(400);
     await request(app.getHttpServer())
-      .post('/payments/payos/webhook')
+      .post("/payments/payos/webhook")
       .send({
-        code: '00',
+        code: "00",
         success: true,
         data: { ...validData, orderCode: 999999 },
         signature: payosClient.signWebhook({ ...validData, orderCode: 999999 }),
       })
       .expect(404);
     await request(app.getHttpServer())
-      .post('/payments/payos/webhook')
+      .post("/payments/payos/webhook")
       .send({
-        code: '00',
+        code: "00",
         success: true,
         data: { ...validData, amount: validData.amount + 1 },
         signature: payosClient.signWebhook({
@@ -526,7 +535,7 @@ describe('PayOS payment API', () => {
     ).toBe(OrderStatus.PENDING_PAYMENT);
   });
 
-  it('returns 400 for malformed webhook data and signatures', async () => {
+  it("returns 400 for malformed webhook data and signatures", async () => {
     const created = await createOrder();
     const order = await dataSource
       .getRepository(Order)
@@ -534,26 +543,26 @@ describe('PayOS payment API', () => {
     const validData: PayosWebhookData = {
       orderCode: Number(order.payosOrderCode),
       amount: order.amountVnd,
-      status: 'PAID',
+      status: "PAID",
     };
 
     await request(app.getHttpServer())
-      .post('/payments/payos/webhook')
-      .send({ code: '00', success: true, data: null, signature: 'not-valid' })
+      .post("/payments/payos/webhook")
+      .send({ code: "00", success: true, data: null, signature: "not-valid" })
       .expect(400);
     await request(app.getHttpServer())
-      .post('/payments/payos/webhook')
+      .post("/payments/payos/webhook")
       .send({
-        code: '00',
+        code: "00",
         success: true,
-        data: { ...validData, amount: '10000' },
-        signature: payosClient.signWebhook({ ...validData, amount: '10000' }),
+        data: { ...validData, amount: "10000" },
+        signature: payosClient.signWebhook({ ...validData, amount: "10000" }),
       })
       .expect(400);
     await request(app.getHttpServer())
-      .post('/payments/payos/webhook')
+      .post("/payments/payos/webhook")
       .send({
-        code: '00',
+        code: "00",
         success: true,
         data: validData,
         signature: { invalid: true },
@@ -566,7 +575,7 @@ describe('PayOS payment API', () => {
     ).toBe(OrderStatus.PENDING_PAYMENT);
   });
 
-  it('persists a cancelled payment without creating charging work', async () => {
+  it("persists a cancelled payment without creating charging work", async () => {
     const created = await createOrder();
     const order = await dataSource
       .getRepository(Order)
@@ -575,13 +584,13 @@ describe('PayOS payment API', () => {
       orderCode: Number(order.payosOrderCode),
       amount: order.amountVnd,
       paymentLinkId: `mock_${order.payosOrderCode}`,
-      status: 'CANCELLED',
+      status: "CANCELLED",
     };
 
     await request(app.getHttpServer())
-      .post('/payments/payos/webhook')
+      .post("/payments/payos/webhook")
       .send({
-        code: '01',
+        code: "01",
         success: false,
         data,
         signature: payosClient.signWebhook(data),
@@ -606,7 +615,7 @@ describe('PayOS payment API', () => {
     ).toBe(0);
   });
 
-  it('redirects signed return and cancel callbacks without changing payment state', async () => {
+  it("redirects signed return and cancel callbacks without changing payment state", async () => {
     const created = await createOrder();
     const order = await dataSource
       .getRepository(Order)
@@ -615,29 +624,29 @@ describe('PayOS payment API', () => {
     const signature = payosClient.signWebhook(callbackData);
 
     const returnResponse = await request(app.getHttpServer())
-      .get('/payments/payos/return')
+      .get("/payments/payos/return")
       .query({ ...callbackData, signature })
       .expect(302);
     const cancelResponse = await request(app.getHttpServer())
-      .get('/payments/payos/cancel')
+      .get("/payments/payos/cancel")
       .query({ ...callbackData, signature })
       .expect(302);
     for (const response of [returnResponse, cancelResponse]) {
       const redirect = new URL(response.headers.location);
-      expect(redirect.origin).toBe('http://localhost:5173');
+      expect(redirect.origin).toBe("http://localhost:5173");
       expect(redirect.pathname).toBe(`/charge/${order.id}`);
-      expect(redirect.search).toBe('');
+      expect(redirect.search).toBe("");
       expect(
-        new URLSearchParams(redirect.hash.slice(1)).get('charge_access'),
+        new URLSearchParams(redirect.hash.slice(1)).get("charge_access"),
       ).toBe(`capability-${order.id}`);
     }
     expect(chargeGateway.issueAccessToken).toHaveBeenCalledWith(order.id);
     await request(app.getHttpServer())
-      .get('/payments/payos/return')
-      .query({ ...callbackData, signature: 'invalid' })
+      .get("/payments/payos/return")
+      .query({ ...callbackData, signature: "invalid" })
       .expect(400);
     await request(app.getHttpServer())
-      .get('/payments/payos/cancel')
+      .get("/payments/payos/cancel")
       .query(callbackData)
       .expect(400);
 
@@ -654,8 +663,8 @@ describe('PayOS payment API', () => {
 
   async function createOrder() {
     return request(app.getHttpServer())
-      .post('/orders')
-      .send({ connectorCode: 'ST01-C01', durationMinutes: 120 })
+      .post("/orders")
+      .send({ connectorCode: "ST01-C01", durationMinutes: 120 })
       .expect(201);
   }
 });

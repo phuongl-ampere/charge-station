@@ -3,14 +3,14 @@ import {
   ConflictException,
   Injectable,
   UnauthorizedException,
-} from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import { randomUUID } from 'node:crypto';
-import { Repository } from 'typeorm';
+} from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import { randomUUID } from "node:crypto";
+import { Repository } from "typeorm";
 
-import { User, UserRole } from '../database/data-source.js';
+import { User, UserRole } from "../database/data-source.js";
 
 export interface AuthTokenPayload {
   sub: string;
@@ -25,7 +25,7 @@ export interface CredentialsInput {
 function getJwtSecret(): string {
   const secret = process.env.JWT_SECRET?.trim();
   if (!secret) {
-    throw new Error('JWT_SECRET must be set');
+    throw new Error("JWT_SECRET must be set");
   }
 
   return secret;
@@ -46,7 +46,7 @@ export class AuthService {
     const { email, password } = this.validateCredentials(input);
     const existingUser = await this.repository.findOneBy({ email });
     if (existingUser) {
-      throw new ConflictException('Email is already registered');
+      throw new ConflictException("Email is already registered");
     }
 
     const user = this.repository.create({
@@ -64,7 +64,7 @@ export class AuthService {
     const { email, password } = this.validateCredentials(input);
     const user = await this.repository.findOneBy({ email });
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException("Invalid credentials");
     }
 
     return { accessToken: this.issueToken(user) };
@@ -74,11 +74,11 @@ export class AuthService {
     try {
       const payload = jwt.verify(token, this.jwtSecret);
       if (
-        typeof payload === 'string' ||
-        typeof payload.sub !== 'string' ||
-        typeof payload.role !== 'string'
+        typeof payload === "string" ||
+        typeof payload.sub !== "string" ||
+        typeof payload.role !== "string"
       ) {
-        throw new UnauthorizedException('Invalid token');
+        throw new UnauthorizedException("Invalid token");
       }
 
       return {
@@ -90,24 +90,24 @@ export class AuthService {
         throw error;
       }
 
-      throw new UnauthorizedException('Invalid token');
+      throw new UnauthorizedException("Invalid token");
     }
   }
 
   private issueToken(user: User): string {
     const payload: AuthTokenPayload = { sub: user.id, role: user.role };
-    return jwt.sign(payload, this.jwtSecret, { expiresIn: '1h' });
+    return jwt.sign(payload, this.jwtSecret, { expiresIn: "1h" });
   }
 
   private validateCredentials(input: CredentialsInput): CredentialsInput {
     if (
       !input ||
-      typeof input.email !== 'string' ||
-      typeof input.password !== 'string' ||
+      typeof input.email !== "string" ||
+      typeof input.password !== "string" ||
       !input.email.trim() ||
       !input.password
     ) {
-      throw new BadRequestException('Email and password are required');
+      throw new BadRequestException("Email and password are required");
     }
 
     return {

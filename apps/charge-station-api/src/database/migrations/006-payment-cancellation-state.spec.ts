@@ -31,9 +31,7 @@ describe("AddPaymentCancellationState", () => {
       ),
     );
     expect(query).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "idx_payment_transactions_pending_cancellation",
-      ),
+      expect.stringContaining("idx_payment_transactions_pending_cancellation"),
     );
   });
 });

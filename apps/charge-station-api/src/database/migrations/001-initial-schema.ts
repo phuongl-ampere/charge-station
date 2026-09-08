@@ -1,7 +1,7 @@
-import type { MigrationInterface, QueryRunner } from 'typeorm';
+import type { MigrationInterface, QueryRunner } from "typeorm";
 
 export class InitialSchemaMigration20260908000000 implements MigrationInterface {
-  name = 'InitialSchemaMigration20260908000000';
+  name = "InitialSchemaMigration20260908000000";
 
   async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
@@ -131,16 +131,16 @@ export class InitialSchemaMigration20260908000000 implements MigrationInterface 
   }
 
   async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query('DROP TABLE device_events');
-    await queryRunner.query('DROP TABLE device_commands');
-    await queryRunner.query('DROP TABLE charging_sessions');
-    await queryRunner.query('DROP TABLE payment_transactions');
-    await queryRunner.query('DROP TABLE orders');
-    await queryRunner.query('DROP TABLE connectors');
-    await queryRunner.query('DROP TABLE pricing_plans');
-    await queryRunner.query('DROP TABLE stations');
-    await queryRunner.query('DROP TABLE users');
-    await queryRunner.query('DROP SEQUENCE payos_order_code_seq');
+    await queryRunner.query("DROP TABLE device_events");
+    await queryRunner.query("DROP TABLE device_commands");
+    await queryRunner.query("DROP TABLE charging_sessions");
+    await queryRunner.query("DROP TABLE payment_transactions");
+    await queryRunner.query("DROP TABLE orders");
+    await queryRunner.query("DROP TABLE connectors");
+    await queryRunner.query("DROP TABLE pricing_plans");
+    await queryRunner.query("DROP TABLE stations");
+    await queryRunner.query("DROP TABLE users");
+    await queryRunner.query("DROP SEQUENCE payos_order_code_seq");
   }
 }
 

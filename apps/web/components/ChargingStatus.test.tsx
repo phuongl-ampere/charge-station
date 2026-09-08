@@ -371,13 +371,8 @@ describe("ChargingStatus", () => {
     expect(
       screen.queryByRole("button", { name: "Retry charging start" }),
     ).not.toBeInTheDocument();
-    await user.click(
-      screen.getByRole("button", { name: "Stop charging" }),
-    );
-    expect(api.stopSession).toHaveBeenCalledWith(
-      "ses_1",
-      "capability-token",
-    );
+    await user.click(screen.getByRole("button", { name: "Stop charging" }));
+    expect(api.stopSession).toHaveBeenCalledWith("ses_1", "capability-token");
   });
 
   it("removes retry access when its session capability is unavailable", async () => {
@@ -422,9 +417,7 @@ describe("ChargingStatus", () => {
 
     await screen.findByRole("button", { name: "Retry charging start" });
 
-    view.rerender(
-      <ChargingStatus orderId="ord_1" api={api} socket={socket} />,
-    );
+    view.rerender(<ChargingStatus orderId="ord_1" api={api} socket={socket} />);
 
     expect(
       screen.queryByRole("button", { name: "Retry charging start" }),
@@ -517,7 +510,9 @@ describe("ChargingStatus", () => {
         status: "START_FAILED",
         timerAuthority: "DEVICE",
       }),
-      retryStart: vi.fn().mockRejectedValue(new Error("Connector is not available")),
+      retryStart: vi
+        .fn()
+        .mockRejectedValue(new Error("Connector is not available")),
       stopSession: vi.fn(),
     };
 

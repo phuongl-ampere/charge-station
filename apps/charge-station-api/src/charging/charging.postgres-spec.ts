@@ -169,7 +169,10 @@ describe("Charging reliability with local PostgreSQL", () => {
         });
       expect(iotClient.isHealthy).toHaveBeenCalledTimes(1);
       expect(iotClient.start).not.toHaveBeenCalled();
-      expect(pendingCommand).toMatchObject({ retryCount: 0, nextAttemptAt: null });
+      expect(pendingCommand).toMatchObject({
+        retryCount: 0,
+        nextAttemptAt: null,
+      });
 
       await expect
         .poll(() => iotClient.start.mock.calls.length, {

@@ -262,7 +262,9 @@ describe("CommandDispatcherService", () => {
     expect(command.retryCount).toBe(3);
     expect(command.status).toBe(DeviceCommandStatus.SENT);
     expect(command.nextAttemptAt).toBeNull();
-    expect(saves.filter((save) => save.status !== DeviceCommandStatus.DISPATCHING)).toEqual([
+    expect(
+      saves.filter((save) => save.status !== DeviceCommandStatus.DISPATCHING),
+    ).toEqual([
       {
         retryCount: 1,
         nextAttemptAt: new Date("2026-09-08T11:00:01.000Z"),

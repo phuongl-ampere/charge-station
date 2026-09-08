@@ -8,9 +8,7 @@ interface ActiveCommandRow {
   created_at: Date | string;
 }
 
-export class AddActiveDeviceCommandSessionTypeUnique
-  implements MigrationInterface
-{
+export class AddActiveDeviceCommandSessionTypeUnique implements MigrationInterface {
   name = "AddActiveDeviceCommandSessionTypeUnique20260908000003";
 
   async up(queryRunner: QueryRunner): Promise<void> {
@@ -57,7 +55,8 @@ function compareActiveCommands(
     left.session_id.localeCompare(right.session_id) ||
     left.command_type.localeCompare(right.command_type) ||
     activeStatusPriority(right.status) - activeStatusPriority(left.status) ||
-    new Date(right.created_at).valueOf() - new Date(left.created_at).valueOf() ||
+    new Date(right.created_at).valueOf() -
+      new Date(left.created_at).valueOf() ||
     right.id.localeCompare(left.id)
   );
 }

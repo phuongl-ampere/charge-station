@@ -1,13 +1,10 @@
-export const PAYOS_PROVIDER = 'PAYOS' as const;
+export const PAYOS_PROVIDER = "PAYOS" as const;
 
 export type PaymentStatus =
-  | 'PENDING_PAYMENT'
-  | 'PAID'
-  | 'PAYMENT_FAILED'
-  | 'EXPIRED'
-  | 'REFUNDED';
+  "PENDING_PAYMENT" | "PAID" | "PAYMENT_FAILED" | "EXPIRED" | "REFUNDED";
 
-export type PaymentTransactionStatus = 'PENDING' | 'PAID' | 'FAILED' | 'EXPIRED';
+export type PaymentTransactionStatus =
+  "PENDING" | "PAID" | "FAILED" | "EXPIRED";
 
 export interface PayosWebhookData {
   orderCode: number | string;

@@ -24,7 +24,10 @@ import { createChargeSocket, type ChargeSocket } from "../lib/socket";
 interface ChargingStatusProps {
   orderId: string;
   accessToken?: string;
-  api?: Pick<ChargeApi, "getOrder" | "getSession" | "stopSession" | "retryStart">;
+  api?: Pick<
+    ChargeApi,
+    "getOrder" | "getSession" | "stopSession" | "retryStart"
+  >;
   socket?: ChargeSocket;
 }
 

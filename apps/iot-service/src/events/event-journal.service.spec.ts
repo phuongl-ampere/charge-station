@@ -23,7 +23,9 @@ describe("EventJournalService", () => {
     }).compile();
 
     try {
-      expect(module.get(EventJournalService)).toBeInstanceOf(EventJournalService);
+      expect(module.get(EventJournalService)).toBeInstanceOf(
+        EventJournalService,
+      );
     } finally {
       await module.close();
     }
@@ -93,7 +95,9 @@ describe("EventJournalService", () => {
 });
 
 async function journalPath(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "charge-station-iot-journal-"));
+  const directory = await mkdtemp(
+    join(tmpdir(), "charge-station-iot-journal-"),
+  );
   paths.push(directory);
   return join(directory, "events.json");
 }

@@ -21,6 +21,7 @@
 ### Task 1: Gate post-payment and retry dispatch behind readiness
 
 **Files:**
+
 - Modify: `apps/charge-station-api/src/iot/command-dispatcher.service.ts`
 - Modify: `apps/charge-station-api/src/payments/payments.service.ts`
 - Modify: `apps/charge-station-api/src/charging/charging.service.ts`
@@ -29,6 +30,7 @@
 - Test: `apps/charge-station-api/src/charging/charging.postgres-spec.ts`
 
 **Interfaces:**
+
 - Produces: `CommandDispatcherService.dispatchWhenIotReady(commandId: string): void`.
 - Consumes: `IotServiceClient.isHealthy(): Promise<boolean>` and existing `dispatch(commandId)`.
 
@@ -37,7 +39,10 @@
 ```ts
 service.dispatchWhenIotReady(command.commandId);
 await Promise.resolve();
-expect(command).toMatchObject({ status: DeviceCommandStatus.PENDING, retryCount: 0 });
+expect(command).toMatchObject({
+  status: DeviceCommandStatus.PENDING,
+  retryCount: 0,
+});
 expect(iotClient.start).not.toHaveBeenCalled();
 await vi.advanceTimersByTimeAsync(250);
 expect(iotClient.start).toHaveBeenCalledTimes(1);
@@ -73,12 +78,14 @@ Expected: the command remains pending at retry zero until one healthy probe disp
 ### Task 2: Classify PayOS create outcomes and preserve ambiguous reservations
 
 **Files:**
+
 - Modify: `apps/charge-station-api/src/payments/payos.client.ts`
 - Modify: `apps/charge-station-api/src/payments/payments.service.ts`
 - Test: `apps/charge-station-api/src/payments/payos.client.spec.ts`
 - Test: `apps/charge-station-api/src/payments/payments.service.spec.ts`
 
 **Interfaces:**
+
 - Produces: `PayosPaymentLinkDefinitiveError` and `PayosPaymentLinkAmbiguousError` from `PayosClient`.
 - Produces: `PaymentsService.createOrder()` payment result with either a checkout URL or `{ paymentPending: true }`, always including the existing capability when `ChargeGateway` is present.
 - Consumes: `PayosClient.getPaymentLinkInfo(orderCode)` for reconciliation.
@@ -129,17 +136,22 @@ Expected: all classification, compensation, pending capability, and authorizatio
 ### Task 3: Prove ambiguous webhooks reconcile in API and PostgreSQL flows
 
 **Files:**
+
 - Modify: `apps/charge-station-api/src/realtime/charge-boundary.e2e-spec.ts`
 - Modify: `apps/charge-station-api/src/payments/payments.postgres-spec.ts`
 
 **Interfaces:**
+
 - Consumes: pending response capability, authorized payment-link polling, and signed `POST /payments/payos/webhook`.
 - Verifies: `PaymentTransactionStatus.PENDING` can move to `PAID` after an ambiguous create result.
 
 - [ ] **Step 1: Write failing API e2e and PostgreSQL tests**
 
 ```ts
-expect(created.body.payment).toEqual({ provider: "PAYOS", paymentPending: true });
+expect(created.body.payment).toEqual({
+  provider: "PAYOS",
+  paymentPending: true,
+});
 await request(app.getHttpServer())
   .get(`/orders/${created.body.orderId}/payment-link`)
   .set("authorization", `Bearer ${created.body.realtimeAccessToken}`)

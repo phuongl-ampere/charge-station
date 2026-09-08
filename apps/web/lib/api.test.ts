@@ -141,7 +141,11 @@ describe("payment-link recovery", () => {
       getPaymentLink(
         orderId: string,
         accessToken: string,
-      ): Promise<{ provider: "PAYOS"; checkoutUrl?: string; paymentPending?: true }>;
+      ): Promise<{
+        provider: "PAYOS";
+        checkoutUrl?: string;
+        paymentPending?: true;
+      }>;
     };
 
     await expect(
@@ -173,7 +177,11 @@ describe("payment-link recovery", () => {
       getPaymentLink(
         orderId: string,
         accessToken: string,
-      ): Promise<{ provider: "PAYOS"; checkoutUrl?: string; paymentPending?: true }>;
+      ): Promise<{
+        provider: "PAYOS";
+        checkoutUrl?: string;
+        paymentPending?: true;
+      }>;
     };
 
     await expect(

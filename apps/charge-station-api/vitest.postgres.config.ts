@@ -1,8 +1,8 @@
-import { defineConfig } from 'vitest/config';
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ['src/**/*.postgres-spec.ts'],
+    include: ["src/**/*.postgres-spec.ts"],
     testTimeout: 30_000,
     hookTimeout: 30_000,
   },

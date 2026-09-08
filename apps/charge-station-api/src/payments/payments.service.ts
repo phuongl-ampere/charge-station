@@ -274,7 +274,9 @@ export class PaymentsService {
     return paymentLink;
   }
 
-  private withRealtimeAccessToken(result: CreateOrderResult): CreateOrderResult {
+  private withRealtimeAccessToken(
+    result: CreateOrderResult,
+  ): CreateOrderResult {
     return this.gateway
       ? {
           ...result,
@@ -598,7 +600,8 @@ export class PaymentsService {
 
       payment.status = PaymentTransactionStatus.PAID;
       payment.order.status = OrderStatus.PAID;
-      payment.paymentLinkId = providerStatus.paymentLinkId ?? payment.paymentLinkId;
+      payment.paymentLinkId =
+        providerStatus.paymentLinkId ?? payment.paymentLinkId;
       payment.cancellationStatus = PaymentCancellationStatus.PROVIDER_PAID;
       payment.cancellationClaimToken = null;
       payment.cancellationClaimedAt = null;
@@ -878,7 +881,8 @@ export class PaymentsService {
           ? OrderStatus.EXPIRED
           : OrderStatus.PAYMENT_FAILED;
         if (expired) {
-          payment.cancellationStatus = PaymentCancellationStatus.PROVIDER_EXPIRED;
+          payment.cancellationStatus =
+            PaymentCancellationStatus.PROVIDER_EXPIRED;
           payment.cancellationClaimToken = null;
           payment.cancellationClaimedAt = null;
           payment.cancellationNextAttemptAt = null;
@@ -1159,15 +1163,11 @@ function parsePositiveOrderCode(value: unknown): number {
 }
 
 function paymentReservationExpiry(now: Date): Date {
-  return new Date(
-    now.valueOf() + paymentReservationTtlMinutes() * 60_000,
-  );
+  return new Date(now.valueOf() + paymentReservationTtlMinutes() * 60_000);
 }
 
 function paymentReservationTtlMinutes(): number {
-  const configuredMinutes = Number(
-    process.env.PAYMENT_RESERVATION_TTL_MINUTES,
-  );
+  const configuredMinutes = Number(process.env.PAYMENT_RESERVATION_TTL_MINUTES);
   return Number.isFinite(configuredMinutes) && configuredMinutes > 0
     ? configuredMinutes
     : DEFAULT_PAYMENT_RESERVATION_TTL_MINUTES;
@@ -1175,10 +1175,7 @@ function paymentReservationTtlMinutes(): number {
 
 function cancellationRetryDelay(attempts: number): number {
   return CANCELLATION_RETRY_DELAYS_MS[
-    Math.min(
-      Math.max(0, attempts - 1),
-      CANCELLATION_RETRY_DELAYS_MS.length - 1,
-    )
+    Math.min(Math.max(0, attempts - 1), CANCELLATION_RETRY_DELAYS_MS.length - 1)
   ];
 }
 

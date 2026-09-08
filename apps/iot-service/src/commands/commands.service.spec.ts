@@ -186,8 +186,7 @@ describe("CommandsService", () => {
     await vi.advanceTimersByTimeAsync(300);
 
     const initialEvents = deliveredEvents.filter(
-      (event) =>
-        event.type === "COMMAND_ACCEPTED" || event.type === "RUNNING",
+      (event) => event.type === "COMMAND_ACCEPTED" || event.type === "RUNNING",
     );
     expect(initialEvents).toHaveLength(4);
     expect(initialEvents[0]?.type).toBe("COMMAND_ACCEPTED");
@@ -195,9 +194,10 @@ describe("CommandsService", () => {
     expect(
       initialEvents.filter((event) => event.type === "COMMAND_ACCEPTED"),
     ).toEqual([initialEvents[0], initialEvents[2]]);
-    expect(
-      initialEvents.filter((event) => event.type === "RUNNING"),
-    ).toEqual([initialEvents[1], initialEvents[3]]);
+    expect(initialEvents.filter((event) => event.type === "RUNNING")).toEqual([
+      initialEvents[1],
+      initialEvents[3],
+    ]);
     expect(initialEvents[2]).toEqual(initialEvents[0]);
     expect(initialEvents[3]).toEqual(initialEvents[1]);
 
@@ -592,7 +592,9 @@ describe("CommandsService", () => {
 });
 
 async function journalPath(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "charge-station-iot-command-"));
+  const directory = await mkdtemp(
+    join(tmpdir(), "charge-station-iot-command-"),
+  );
   journalDirectories.push(directory);
   return join(directory, "events.json");
 }

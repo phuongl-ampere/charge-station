@@ -1,49 +1,49 @@
-import { BadRequestException } from '@nestjs/common';
-import type { PayosWebhook, PayosWebhookData } from '@charge-station/contracts';
+import { BadRequestException } from "@nestjs/common";
+import type { PayosWebhook, PayosWebhookData } from "@charge-station/contracts";
 
 export function parsePayosWebhook(value: unknown): PayosWebhook {
   if (!isRecord(value)) {
-    throw new BadRequestException('PayOS webhook body must be an object');
+    throw new BadRequestException("PayOS webhook body must be an object");
   }
 
   const { code, desc, success, data, signature } = value;
-  if (typeof code !== 'string' || !code) {
+  if (typeof code !== "string" || !code) {
     throw new BadRequestException(
-      'PayOS webhook code must be a non-empty string',
+      "PayOS webhook code must be a non-empty string",
     );
   }
-  if (desc !== undefined && typeof desc !== 'string') {
-    throw new BadRequestException('PayOS webhook desc must be a string');
+  if (desc !== undefined && typeof desc !== "string") {
+    throw new BadRequestException("PayOS webhook desc must be a string");
   }
-  if (typeof success !== 'boolean') {
-    throw new BadRequestException('PayOS webhook success must be a boolean');
+  if (typeof success !== "boolean") {
+    throw new BadRequestException("PayOS webhook success must be a boolean");
   }
-  if (typeof signature !== 'string') {
-    throw new BadRequestException('PayOS webhook signature must be a string');
+  if (typeof signature !== "string") {
+    throw new BadRequestException("PayOS webhook signature must be a string");
   }
   if (!isRecord(data)) {
-    throw new BadRequestException('PayOS webhook data must be an object');
+    throw new BadRequestException("PayOS webhook data must be an object");
   }
   if (
-    typeof data.orderCode !== 'number' &&
-    typeof data.orderCode !== 'string'
+    typeof data.orderCode !== "number" &&
+    typeof data.orderCode !== "string"
   ) {
     throw new BadRequestException(
-      'PayOS webhook order code must be a number or string',
+      "PayOS webhook order code must be a number or string",
     );
   }
-  if (typeof data.amount !== 'number' || !Number.isFinite(data.amount)) {
+  if (typeof data.amount !== "number" || !Number.isFinite(data.amount)) {
     throw new BadRequestException(
-      'PayOS webhook amount must be a finite number',
+      "PayOS webhook amount must be a finite number",
     );
   }
   if (
     (data.paymentLinkId !== undefined &&
-      typeof data.paymentLinkId !== 'string') ||
-    (data.status !== undefined && typeof data.status !== 'string')
+      typeof data.paymentLinkId !== "string") ||
+    (data.status !== undefined && typeof data.status !== "string")
   ) {
     throw new BadRequestException(
-      'PayOS webhook payment fields have invalid types',
+      "PayOS webhook payment fields have invalid types",
     );
   }
   if (
@@ -51,13 +51,13 @@ export function parsePayosWebhook(value: unknown): PayosWebhook {
       (entry) =>
         entry !== null &&
         entry !== undefined &&
-        typeof entry !== 'string' &&
-        typeof entry !== 'number' &&
-        typeof entry !== 'boolean',
+        typeof entry !== "string" &&
+        typeof entry !== "number" &&
+        typeof entry !== "boolean",
     )
   ) {
     throw new BadRequestException(
-      'PayOS webhook data must contain scalar values',
+      "PayOS webhook data must contain scalar values",
     );
   }
 
@@ -71,5 +71,5 @@ export function parsePayosWebhook(value: unknown): PayosWebhook {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

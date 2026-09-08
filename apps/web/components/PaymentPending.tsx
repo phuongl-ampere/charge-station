@@ -20,7 +20,10 @@ export function PaymentPending({
   onViewStatus,
 }: PaymentPendingProps) {
   return (
-    <section className="checkout-panel" aria-labelledby="pending-payment-heading">
+    <section
+      className="checkout-panel"
+      aria-labelledby="pending-payment-heading"
+    >
       <div className="section-heading">
         <span className="section-icon" aria-hidden="true">
           <RefreshCw size={16} strokeWidth={2} />

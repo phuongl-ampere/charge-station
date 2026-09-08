@@ -251,10 +251,14 @@ describe("PaymentsService webhook processing", () => {
     expect(order.status).toBe(OrderStatus.EXPIRED);
     expect(connector.status).toBe("AVAILABLE");
     expect(payosClient.cancelPaymentLink).toHaveBeenCalledWith(100001);
-    expect(gateway.publishOrder).toHaveBeenCalledWith(order.id, "payment.updated", {
-      orderId: order.id,
-      status: OrderStatus.EXPIRED,
-    });
+    expect(gateway.publishOrder).toHaveBeenCalledWith(
+      order.id,
+      "payment.updated",
+      {
+        orderId: order.id,
+        status: OrderStatus.EXPIRED,
+      },
+    );
 
     await expect(expiryService.expireDueReservations(now)).resolves.toBe(0);
     expect(payosClient.cancelPaymentLink).toHaveBeenCalledOnce();
@@ -330,7 +334,10 @@ describe("PaymentsService webhook processing", () => {
     );
 
     await expect(
-      service.createOrder({ connectorCode: connector.code, durationMinutes: 60 }),
+      service.createOrder({
+        connectorCode: connector.code,
+        durationMinutes: 60,
+      }),
     ).rejects.toThrow("Payment reservation is no longer pending");
 
     expect(savedPayment?.status).toBe(PaymentTransactionStatus.EXPIRED);
@@ -829,7 +836,9 @@ describe("PaymentsService webhook processing", () => {
       },
     };
 
-    await expect(service.handleWebhook(body)).resolves.toEqual({ success: true });
+    await expect(service.handleWebhook(body)).resolves.toEqual({
+      success: true,
+    });
     await service.handleWebhook(body);
 
     expect(manager.query).toHaveBeenCalledWith(

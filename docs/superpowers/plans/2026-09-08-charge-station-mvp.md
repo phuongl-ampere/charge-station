@@ -59,6 +59,7 @@ The PayOS implementation in `/Users/phuongl/myai/projects/fuvi/wemake` establish
 ### Task 1: Create the workspace, local runtime, and test baseline
 
 **Files:**
+
 - Create: `package.json`
 - Create: `pnpm-workspace.yaml`
 - Create: `tsconfig.base.json`
@@ -75,18 +76,19 @@ The PayOS implementation in `/Users/phuongl/myai/projects/fuvi/wemake` establish
 - Create: `apps/web/package.json`
 
 **Interfaces:**
+
 - Produces workspace aliases `@charge-station/contracts`, `@charge-station/api`, `@charge-station/iot-service`, and `@charge-station/web`.
 - Produces a PostgreSQL service at `postgres://charge:charge@localhost:5432/charge_station`.
 
 - [ ] **Step 1: Write the failing contracts test**
 
 ```ts
-import { describe, expect, it } from 'vitest';
-import { APP_NAME } from './index';
+import { describe, expect, it } from "vitest";
+import { APP_NAME } from "./index";
 
-describe('contracts package', () => {
-  it('exports its application identity', () => {
-    expect(APP_NAME).toBe('charge-station');
+describe("contracts package", () => {
+  it("exports its application identity", () => {
+    expect(APP_NAME).toBe("charge-station");
   });
 });
 ```
@@ -102,7 +104,7 @@ Expected: command fails because the workspace and `APP_NAME` export do not exist
 Create a root package with `dev`, `build`, `test`, `lint`, and `format` scripts that delegate through pnpm workspaces. Configure `pnpm-workspace.yaml` for `apps/*` and `packages/*`, enable strict TypeScript in `tsconfig.base.json`, and export:
 
 ```ts
-export const APP_NAME = 'charge-station';
+export const APP_NAME = "charge-station";
 ```
 
 Configure Docker Compose PostgreSQL 16 with a health check, named volume, database `charge_station`, user `charge`, and password `charge`. Add `.env.example` with database, JWT, PayOS, frontend, IoT Service, and service-token variables.
@@ -129,6 +131,7 @@ git commit -m "chore: scaffold charge station workspace"
 ### Task 2: Define shared contracts and test price calculation
 
 **Files:**
+
 - Modify: `packages/contracts/src/index.ts`
 - Create: `packages/contracts/src/payment.ts`
 - Create: `packages/contracts/src/iot.ts`
@@ -136,6 +139,7 @@ git commit -m "chore: scaffold charge station workspace"
 - Create: `packages/contracts/src/pricing.test.ts`
 
 **Interfaces:**
+
 - Produces `calculateAmountVnd(durationMinutes: number): number`.
 - Produces `PaymentStatus`, `ChargingStatus`, `DeviceCommandType`, `PayosWebhook`, `StartChargingCommand`, and `DeviceEvent`.
 - Consumed by both NestJS services and the Next.js application.
@@ -143,20 +147,22 @@ git commit -m "chore: scaffold charge station workspace"
 - [ ] **Step 1: Write the failing price test**
 
 ```ts
-import { describe, expect, it } from 'vitest';
-import { calculateAmountVnd } from './pricing';
+import { describe, expect, it } from "vitest";
+import { calculateAmountVnd } from "./pricing";
 
-describe('calculateAmountVnd', () => {
+describe("calculateAmountVnd", () => {
   it.each([
     [60, 5000],
     [120, 10000],
     [180, 15000],
-  ])('charges %i minutes as %i VND', (minutes, expected) => {
+  ])("charges %i minutes as %i VND", (minutes, expected) => {
     expect(calculateAmountVnd(minutes)).toBe(expected);
   });
 
-  it('rejects a duration that is not a whole hour', () => {
-    expect(() => calculateAmountVnd(90)).toThrow('Duration must be a whole number of hours');
+  it("rejects a duration that is not a whole hour", () => {
+    expect(() => calculateAmountVnd(90)).toThrow(
+      "Duration must be a whole number of hours",
+    );
   });
 });
 ```
@@ -188,7 +194,13 @@ export interface DeviceEvent {
   sessionId: string;
   deviceId: string;
   connectorCode: string;
-  type: 'COMMAND_ACCEPTED' | 'RUNNING' | 'HEARTBEAT' | 'STOPPED' | 'COMMAND_FAILED' | 'DEVICE_OFFLINE';
+  type:
+    | "COMMAND_ACCEPTED"
+    | "RUNNING"
+    | "HEARTBEAT"
+    | "STOPPED"
+    | "COMMAND_FAILED"
+    | "DEVICE_OFFLINE";
   occurredAt: string;
   payload: Record<string, unknown>;
 }
@@ -218,6 +230,7 @@ git commit -m "feat: define charging and payment contracts"
 ### Task 3: Implement Charge Station database schema, connector lookup, and JWT authentication
 
 **Files:**
+
 - Create: `apps/charge-station-api/src/main.ts`
 - Create: `apps/charge-station-api/src/app.module.ts`
 - Create: `apps/charge-station-api/src/database/data-source.ts`
@@ -233,6 +246,7 @@ git commit -m "feat: define charging and payment contracts"
 - Create: `apps/charge-station-api/src/connectors/connectors.service.spec.ts`
 
 **Interfaces:**
+
 - Produces public `GET /public/connectors/:connectorCode`.
 - Produces `POST /auth/register` and `POST /auth/login`, each returning `{ accessToken: string }`.
 - Produces entities `User`, `Station`, `Connector`, `Order`, `PaymentTransaction`, `ChargingSession`, `DeviceCommand`, and `DeviceEvent`.
@@ -240,17 +254,17 @@ git commit -m "feat: define charging and payment contracts"
 - [ ] **Step 1: Write the failing connector availability test**
 
 ```ts
-it('returns an available connector with permitted durations and price', async () => {
+it("returns an available connector with permitted durations and price", async () => {
   repository.findOneBy.mockResolvedValue({
-    code: 'ST01-C01',
-    status: 'AVAILABLE',
-    station: { code: 'ST01', name: 'Demo Station' },
+    code: "ST01-C01",
+    status: "AVAILABLE",
+    station: { code: "ST01", name: "Demo Station" },
   });
 
-  await expect(service.getPublicConnector('ST01-C01')).resolves.toEqual({
-    stationCode: 'ST01',
-    connectorCode: 'ST01-C01',
-    status: 'AVAILABLE',
+  await expect(service.getPublicConnector("ST01-C01")).resolves.toEqual({
+    stationCode: "ST01",
+    connectorCode: "ST01-C01",
+    status: "AVAILABLE",
     allowedDurationsMinutes: [60, 120, 180],
     hourlyPriceVnd: 5000,
   });
@@ -283,6 +297,7 @@ git commit -m "feat: add charge station persistence and auth"
 ### Task 4: Implement PayOS checkout creation and verified webhook processing
 
 **Files:**
+
 - Create: `apps/charge-station-api/src/payments/payments.module.ts`
 - Create: `apps/charge-station-api/src/payments/payments.controller.ts`
 - Create: `apps/charge-station-api/src/payments/payments.service.ts`
@@ -294,6 +309,7 @@ git commit -m "feat: add charge station persistence and auth"
 - Create: `apps/charge-station-api/src/payments/payments.e2e-spec.ts`
 
 **Interfaces:**
+
 - Produces `POST /orders` with `{ connectorCode, durationMinutes }` and response `{ orderId, amount, currency, payment: { provider, checkoutUrl } }`.
 - Produces `POST /payments/payos/webhook` accepting `PayosWebhook`.
 - Produces public `GET /payments/payos/return` and `GET /payments/payos/cancel` that validate query signatures and redirect to the frontend charge-status route without changing payment state.
@@ -302,15 +318,19 @@ git commit -m "feat: add charge station persistence and auth"
 - [ ] **Step 1: Write the failing PayOS signature tests**
 
 ```ts
-it('signs sorted non-empty webhook data', () => {
-  expect(buildPayosSignature(
-    { amount: 10000, orderCode: 100001, status: 'PAID', ignored: '' },
-    'checksum-key',
-  )).toBe('fdfdaefba61fa5a11bf98f4642fde8e875b984116b0a9a1f48990793dbabf47f');
+it("signs sorted non-empty webhook data", () => {
+  expect(
+    buildPayosSignature(
+      { amount: 10000, orderCode: 100001, status: "PAID", ignored: "" },
+      "checksum-key",
+    ),
+  ).toBe("fdfdaefba61fa5a11bf98f4642fde8e875b984116b0a9a1f48990793dbabf47f");
 });
 
-it('rejects a signature with the wrong checksum key', () => {
-  expect(verifyPayosSignature({ orderCode: 100001 }, 'not-valid', 'checksum-key')).toBe(false);
+it("rejects a signature with the wrong checksum key", () => {
+  expect(
+    verifyPayosSignature({ orderCode: 100001 }, "not-valid", "checksum-key"),
+  ).toBe(false);
 });
 ```
 
@@ -338,12 +358,12 @@ Sign with HMAC-SHA256 and call `POST https://api-merchant.payos.vn/v2/payment-re
 - [ ] **Step 4: Write the failing webhook business-flow test**
 
 ```ts
-it('marks the order paid and creates exactly one start command for a valid webhook', async () => {
+it("marks the order paid and creates exactly one start command for a valid webhook", async () => {
   const body = signedWebhook({
     orderCode: pendingOrder.payosOrderCode,
     amount: pendingOrder.amountVnd,
-    paymentLinkId: 'pl_123',
-    status: 'PAID',
+    paymentLinkId: "pl_123",
+    status: "PAID",
   });
 
   await service.handleWebhook(body);
@@ -393,6 +413,7 @@ git commit -m "feat: add verified PayOS checkout and webhook"
 ### Task 5: Implement the independent mock IoT Service
 
 **Files:**
+
 - Create: `apps/iot-service/src/main.ts`
 - Create: `apps/iot-service/src/app.module.ts`
 - Create: `apps/iot-service/src/commands/commands.controller.ts`
@@ -404,6 +425,7 @@ git commit -m "feat: add verified PayOS checkout and webhook"
 - Create: `apps/iot-service/src/commands/commands.e2e-spec.ts`
 
 **Interfaces:**
+
 - Produces `POST /internal/commands/start` and `POST /internal/commands/stop`.
 - Consumes `StartChargingCommand` and returns `{ commandId, accepted, deviceId, status }`.
 - Calls Charge Station `POST /internal/device-events` with a `DeviceEvent`.
@@ -411,17 +433,24 @@ git commit -m "feat: add verified PayOS checkout and webhook"
 - [ ] **Step 1: Write the failing timer test**
 
 ```ts
-it('emits RUNNING and then STOPPED with TIMER_EXPIRED for an accepted start command', async () => {
+it("emits RUNNING and then STOPPED with TIMER_EXPIRED for an accepted start command", async () => {
   await service.start(commandWithDuration(2));
 
   await vi.advanceTimersByTimeAsync(100);
-  expect(eventClient.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'RUNNING' }));
+  expect(eventClient.post).toHaveBeenCalledWith(
+    expect.objectContaining({ type: "RUNNING" }),
+  );
 
   await vi.advanceTimersByTimeAsync(2000);
-  expect(eventClient.post).toHaveBeenCalledWith(expect.objectContaining({
-    type: 'STOPPED',
-    payload: expect.objectContaining({ reason: 'TIMER_EXPIRED', relayState: 'OFF' }),
-  }));
+  expect(eventClient.post).toHaveBeenCalledWith(
+    expect.objectContaining({
+      type: "STOPPED",
+      payload: expect.objectContaining({
+        reason: "TIMER_EXPIRED",
+        relayState: "OFF",
+      }),
+    }),
+  );
 });
 ```
 
@@ -458,6 +487,7 @@ git commit -m "feat: add mock iot timer service"
 ### Task 6: Dispatch IoT commands and consume authenticated device events
 
 **Files:**
+
 - Create: `apps/charge-station-api/src/iot/iot.module.ts`
 - Create: `apps/charge-station-api/src/iot/iot-service.client.ts`
 - Create: `apps/charge-station-api/src/iot/device-events.controller.ts`
@@ -467,6 +497,7 @@ git commit -m "feat: add mock iot timer service"
 - Create: `apps/charge-station-api/src/iot/command-dispatcher.service.spec.ts`
 
 **Interfaces:**
+
 - Consumes persisted `DeviceCommand` rows and calls IoT Service.
 - Consumes `POST /internal/device-events` with `DeviceEvent`.
 - Produces charging session transitions `PENDING -> STARTING -> CHARGING -> COMPLETED | CANCELLED | START_FAILED`.
@@ -474,14 +505,14 @@ git commit -m "feat: add mock iot timer service"
 - [ ] **Step 1: Write the failing device-event idempotency test**
 
 ```ts
-it('changes a session to CHARGING once when RUNNING arrives twice', async () => {
+it("changes a session to CHARGING once when RUNNING arrives twice", async () => {
   await service.handle(runningEvent);
-  await service.handle({ ...runningEvent, eventId: 'evt_duplicate_delivery' });
+  await service.handle({ ...runningEvent, eventId: "evt_duplicate_delivery" });
 
   expect(sessionRepository.updateStatus).toHaveBeenCalledTimes(1);
   expect(sessionRepository.updateStatus).toHaveBeenCalledWith(
     runningEvent.sessionId,
-    'CHARGING',
+    "CHARGING",
     expect.objectContaining({ startedAt: expect.any(Date) }),
   );
 });
@@ -523,6 +554,7 @@ git commit -m "feat: dispatch iot commands and consume device events"
 ### Task 7: Expose order and session status with Socket.IO updates
 
 **Files:**
+
 - Create: `apps/charge-station-api/src/orders/orders.module.ts`
 - Create: `apps/charge-station-api/src/orders/orders.controller.ts`
 - Create: `apps/charge-station-api/src/orders/orders.service.ts`
@@ -533,6 +565,7 @@ git commit -m "feat: dispatch iot commands and consume device events"
 - Create: `apps/charge-station-api/src/charging/charging.controller.spec.ts`
 
 **Interfaces:**
+
 - Produces `GET /orders/:id`, `GET /sessions/:id`, and `POST /sessions/:id/stop`.
 - Produces Socket.IO rooms `order:{orderId}` and `session:{sessionId}`.
 - Publishes `payment.updated`, `session.updated`, and `device.updated`.
@@ -540,14 +573,14 @@ git commit -m "feat: dispatch iot commands and consume device events"
 - [ ] **Step 1: Write the failing status projection test**
 
 ```ts
-it('returns an estimated remaining time without claiming it controls the device timer', async () => {
-  const response = await controller.getSession('ses_1');
+it("returns an estimated remaining time without claiming it controls the device timer", async () => {
+  const response = await controller.getSession("ses_1");
 
   expect(response).toMatchObject({
-    id: 'ses_1',
-    status: 'CHARGING',
+    id: "ses_1",
+    status: "CHARGING",
     estimatedRemainingSeconds: 3450,
-    timerAuthority: 'DEVICE',
+    timerAuthority: "DEVICE",
   });
 });
 ```
@@ -563,9 +596,9 @@ Expected: failure because charging-status projection is missing.
 Use server-side event publishers from payment and device-event services, not HTTP controllers, to emit:
 
 ```ts
-gateway.publishOrder(orderId, 'payment.updated', orderStatus);
-gateway.publishSession(sessionId, 'session.updated', sessionStatus);
-gateway.publishSession(sessionId, 'device.updated', deviceSnapshot);
+gateway.publishOrder(orderId, "payment.updated", orderStatus);
+gateway.publishSession(sessionId, "session.updated", sessionStatus);
+gateway.publishSession(sessionId, "device.updated", deviceSnapshot);
 ```
 
 The stop endpoint creates a persistent `STOP_CHARGING` command and uses the same dispatcher as start. It returns `202 Accepted`; it must not report the session as stopped before a device `STOPPED` event.
@@ -586,6 +619,7 @@ git commit -m "feat: expose charge status and realtime updates"
 ### Task 8: Build the Next.js QR checkout and charging status workflow
 
 **Files:**
+
 - Create: `apps/web/app/layout.tsx`
 - Create: `apps/web/app/page.tsx`
 - Create: `apps/web/app/scan/[connectorCode]/page.tsx`
@@ -601,6 +635,7 @@ git commit -m "feat: expose charge status and realtime updates"
 - Create: `apps/web/e2e/checkout.spec.ts`
 
 **Interfaces:**
+
 - Consumes `GET /public/connectors/:connectorCode`, `POST /orders`, `GET /orders/:id`, and `GET /sessions/:id`.
 - Opens PayOS `checkoutUrl`; renders a convenience QR encoding the checkout URL with `qrcode.react`.
 - Consumes Socket.IO events while polling status every 5 seconds when disconnected.
@@ -608,14 +643,20 @@ git commit -m "feat: expose charge status and realtime updates"
 - [ ] **Step 1: Write the failing duration-picker test**
 
 ```tsx
-it('selects two hours and shows the server price format', async () => {
+it("selects two hours and shows the server price format", async () => {
   const user = userEvent.setup();
-  render(<DurationPicker durations={[60, 120]} hourlyPriceVnd={5000} onSelect={onSelect} />);
+  render(
+    <DurationPicker
+      durations={[60, 120]}
+      hourlyPriceVnd={5000}
+      onSelect={onSelect}
+    />,
+  );
 
-  await user.click(screen.getByRole('button', { name: '2 hours' }));
+  await user.click(screen.getByRole("button", { name: "2 hours" }));
 
   expect(onSelect).toHaveBeenCalledWith(120);
-  expect(screen.getByText('10,000 VND')).toBeVisible();
+  expect(screen.getByText("10,000 VND")).toBeVisible();
 });
 ```
 
@@ -636,12 +677,14 @@ Use operational styling: compact controls, clear monetary values, and no marketi
 - [ ] **Step 4: Write the failing realtime fallback test**
 
 ```tsx
-it('polls session status every five seconds after socket disconnect', async () => {
-  render(<ChargingStatus orderId="ord_1" socket={disconnectedSocket} api={api} />);
+it("polls session status every five seconds after socket disconnect", async () => {
+  render(
+    <ChargingStatus orderId="ord_1" socket={disconnectedSocket} api={api} />,
+  );
 
   await vi.advanceTimersByTimeAsync(5000);
 
-  expect(api.getOrder).toHaveBeenCalledWith('ord_1');
+  expect(api.getOrder).toHaveBeenCalledWith("ord_1");
 });
 ```
 
@@ -661,6 +704,7 @@ git commit -m "feat: add QR checkout and charging UI"
 ### Task 9: Verify the full mock payment-to-charging lifecycle and document operations
 
 **Files:**
+
 - Create: `apps/charge-station-api/test/charge-lifecycle.e2e-spec.ts`
 - Create: `README.md`
 - Create: `docs/local-development.md`
@@ -668,25 +712,29 @@ git commit -m "feat: add QR checkout and charging UI"
 - Modify: `.env.example`
 
 **Interfaces:**
+
 - Verifies the complete path from connector lookup through PayOS webhook, command dispatch, mock-device timer event, and frontend-visible session state.
 - Documents Docker Compose startup, PayOS sandbox configuration, service URLs, test webhook generation, and mock failure modes.
 
 - [ ] **Step 1: Write the failing full-lifecycle E2E test**
 
 ```ts
-it('starts one device timer only after a verified PayOS webhook', async () => {
-  const order = await createOrder('ST01-C01', 60);
+it("starts one device timer only after a verified PayOS webhook", async () => {
+  const order = await createOrder("ST01-C01", 60);
   expect(mockIotService.commands).toHaveLength(0);
 
   await postPayosWebhook({
     orderCode: order.payosOrderCode,
     amount: 5000,
     success: true,
-    code: '00',
+    code: "00",
   });
 
   await waitFor(() => expect(mockIotService.commands).toHaveLength(1));
-  expect(await getSession(order.id)).toMatchObject({ status: 'CHARGING', timerAuthority: 'DEVICE' });
+  expect(await getSession(order.id)).toMatchObject({
+    status: "CHARGING",
+    timerAuthority: "DEVICE",
+  });
 });
 ```
 

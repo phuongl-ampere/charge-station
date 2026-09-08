@@ -15,10 +15,10 @@ The MVP price is 5,000 VND per hour. The backend always calculates the price and
 
 The system consists of two independent services.
 
-| Service | Technology | Responsibilities |
-| --- | --- | --- |
-| `charge-station` | Next.js frontend, NestJS backend, TypeORM, PostgreSQL | Web checkout, JWT authentication, station and connector management, orders, PayOS payments, charging sessions, realtime updates, and command orchestration. |
-| `iot-service` | Separate service; HTTP API mock for the MVP | Device connectivity, command delivery, acknowledgements and device events, and device status monitoring. Production can use MQTT, TCP/UDP, or a SIM-based protocol. |
+| Service          | Technology                                            | Responsibilities                                                                                                                                                    |
+| ---------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `charge-station` | Next.js frontend, NestJS backend, TypeORM, PostgreSQL | Web checkout, JWT authentication, station and connector management, orders, PayOS payments, charging sessions, realtime updates, and command orchestration.         |
+| `iot-service`    | Separate service; HTTP API mock for the MVP           | Device connectivity, command delivery, acknowledgements and device events, and device status monitoring. Production can use MQTT, TCP/UDP, or a SIM-based protocol. |
 
 `charge-station` never communicates directly with a relay or SIM protocol. It communicates only through the `iot-service` API.
 
@@ -94,14 +94,14 @@ CHARGING -> DEVICE_OFFLINE
 
 ### Public and Authenticated APIs
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/public/connectors/:connectorCode` | Get connector availability, pricing, and permitted durations. |
-| `POST` | `/orders` | Create an order and payment request. Require JWT if the system requires sign-in. |
-| `GET` | `/orders/:id` | Get order and payment status. |
-| `GET` | `/sessions/:id` | Get charging status and estimated remaining time. |
-| `POST` | `/sessions/:id/stop` | Request early charging stop. |
-| `POST` | `/payments/payos/webhook` | PayOS-only server-to-server webhook endpoint. |
+| Method | Path                                | Purpose                                                                          |
+| ------ | ----------------------------------- | -------------------------------------------------------------------------------- |
+| `GET`  | `/public/connectors/:connectorCode` | Get connector availability, pricing, and permitted durations.                    |
+| `POST` | `/orders`                           | Create an order and payment request. Require JWT if the system requires sign-in. |
+| `GET`  | `/orders/:id`                       | Get order and payment status.                                                    |
+| `GET`  | `/sessions/:id`                     | Get charging status and estimated remaining time.                                |
+| `POST` | `/sessions/:id/stop`                | Request early charging stop.                                                     |
+| `POST` | `/payments/payos/webhook`           | PayOS-only server-to-server webhook endpoint.                                    |
 
 Create-order request:
 
@@ -234,17 +234,17 @@ When the REST mock is replaced by MQTT or a SIM-based protocol, the device-proto
 
 ## PostgreSQL Data Model
 
-| Entity | Core data |
-| --- | --- |
-| `users` | Accounts, roles, and JWT identity. |
-| `stations` | Charging stations and device mappings. |
-| `connectors` | Connectors, availability, and applicable pricing. |
-| `pricing_plans` | Pricing rules and time unit. |
-| `orders` | Amount, payment state, and unique numeric PayOS order code. |
+| Entity                 | Core data                                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------------------ |
+| `users`                | Accounts, roles, and JWT identity.                                                               |
+| `stations`             | Charging stations and device mappings.                                                           |
+| `connectors`           | Connectors, availability, and applicable pricing.                                                |
+| `pricing_plans`        | Pricing rules and time unit.                                                                     |
+| `orders`               | Amount, payment state, and unique numeric PayOS order code.                                      |
 | `payment_transactions` | PayOS checkout URL, payment link ID, raw webhook payload, signature result, and idempotency key. |
-| `charging_sessions` | Order and connector references, state, `startedAt`, `expectedEndAt`, and `stoppedAt`. |
-| `device_commands` | Command ID, payload, retry count, acknowledgement/result, and timestamps. |
-| `device_events` | Event ID, payload, event timestamp, and processing status. |
+| `charging_sessions`    | Order and connector references, state, `startedAt`, `expectedEndAt`, and `stoppedAt`.            |
+| `device_commands`      | Command ID, payload, retry count, acknowledgement/result, and timestamps.                        |
+| `device_events`        | Event ID, payload, event timestamp, and processing status.                                       |
 
 `orders.payosOrderCode`, `payment_transactions.payosPaymentLinkId`,
 `device_commands.commandId`, and `device_events.eventId` must be unique.

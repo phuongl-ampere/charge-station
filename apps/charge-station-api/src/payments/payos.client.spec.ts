@@ -58,7 +58,9 @@ describe("PayosClient mock provider", () => {
     process.env.PAYOS_RETURN_URL = "https://example.test/return";
     process.env.PAYOS_CANCEL_URL = "https://example.test/cancel";
 
-    expect(() => new PayosClient()).toThrow("PAYOS_CLIENT_ID must be configured");
+    expect(() => new PayosClient()).toThrow(
+      "PAYOS_CLIENT_ID must be configured",
+    );
   });
 
   it("creates a deterministic local checkout without a network request", async () => {
@@ -94,13 +96,15 @@ describe("PayosClient mock provider", () => {
     );
     const client = createLiveClient();
 
-    await expect(client.createPaymentLink(createInput())).rejects.toBeInstanceOf(
-      PayosPaymentLinkDefinitiveError,
+    await expect(
+      client.createPaymentLink(createInput()),
+    ).rejects.toBeInstanceOf(PayosPaymentLinkDefinitiveError);
+    await expect(client.createPaymentLink(createInput())).rejects.toMatchObject(
+      {
+        classification: "DEFINITIVE",
+        httpStatus: 422,
+      },
     );
-    await expect(client.createPaymentLink(createInput())).rejects.toMatchObject({
-      classification: "DEFINITIVE",
-      httpStatus: 422,
-    });
   });
 
   it("classifies a provider timeout and 5xx response as ambiguous", async () => {
@@ -119,13 +123,15 @@ describe("PayosClient mock provider", () => {
     );
     const client = createLiveClient();
 
-    await expect(client.createPaymentLink(createInput())).rejects.toBeInstanceOf(
-      PayosPaymentLinkAmbiguousError,
+    await expect(
+      client.createPaymentLink(createInput()),
+    ).rejects.toBeInstanceOf(PayosPaymentLinkAmbiguousError);
+    await expect(client.createPaymentLink(createInput())).rejects.toMatchObject(
+      {
+        classification: "AMBIGUOUS",
+        httpStatus: 503,
+      },
     );
-    await expect(client.createPaymentLink(createInput())).rejects.toMatchObject({
-      classification: "AMBIGUOUS",
-      httpStatus: 503,
-    });
   });
 
   it.each([
@@ -180,12 +186,14 @@ describe("PayosClient mock provider", () => {
     } as never);
     const client = createLiveClient();
 
-    await expect(client.createPaymentLink(createInput())).rejects.toBeInstanceOf(
-      PayosPaymentLinkDefinitiveError,
+    await expect(
+      client.createPaymentLink(createInput()),
+    ).rejects.toBeInstanceOf(PayosPaymentLinkDefinitiveError);
+    await expect(client.createPaymentLink(createInput())).rejects.toMatchObject(
+      {
+        classification: "DEFINITIVE",
+      },
     );
-    await expect(client.createPaymentLink(createInput())).rejects.toMatchObject({
-      classification: "DEFINITIVE",
-    });
   });
 
   it("signs a local webhook fixture that it can verify", () => {

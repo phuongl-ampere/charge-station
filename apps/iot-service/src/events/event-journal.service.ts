@@ -136,7 +136,9 @@ export class EventJournalService implements OnModuleDestroy {
     }
 
     const parsed = parseJournal(source, this.path);
-    this.records = parsed.records.sort((left, right) => left.sequence - right.sequence);
+    this.records = parsed.records.sort(
+      (left, right) => left.sequence - right.sequence,
+    );
     this.initialized = true;
   }
 
@@ -185,7 +187,11 @@ function parseJournal(source: string, path: string): EventJournalFile {
     throw new Error(`IoT event journal is not valid JSON: ${path}`);
   }
 
-  if (!isRecord(parsed) || parsed.version !== JOURNAL_VERSION || !Array.isArray(parsed.records)) {
+  if (
+    !isRecord(parsed) ||
+    parsed.version !== JOURNAL_VERSION ||
+    !Array.isArray(parsed.records)
+  ) {
     throw new Error(`IoT event journal has an unsupported format: ${path}`);
   }
 
@@ -200,7 +206,11 @@ function parseJournal(source: string, path: string): EventJournalFile {
   return { version: JOURNAL_VERSION, records };
 }
 
-function parseRecord(value: unknown, path: string, index: number): JournalRecord {
+function parseRecord(
+  value: unknown,
+  path: string,
+  index: number,
+): JournalRecord {
   if (
     !isRecord(value) ||
     !isPositiveSafeInteger(value.sequence) ||

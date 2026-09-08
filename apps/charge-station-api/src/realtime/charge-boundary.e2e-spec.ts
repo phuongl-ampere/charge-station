@@ -161,9 +161,7 @@ describe("charge capability boundary", () => {
     const createPaymentLink = vi
       .spyOn(payosClient, "createPaymentLink")
       .mockRejectedValue(
-        new PayosPaymentLinkAmbiguousError(
-          "PayOS payment creation timed out",
-        ),
+        new PayosPaymentLinkAmbiguousError("PayOS payment creation timed out"),
       );
     const getPaymentLinkInfo = vi
       .spyOn(payosClient, "getPaymentLinkInfo")
@@ -243,8 +241,11 @@ describe("charge capability boundary", () => {
         ).status,
       ).toBe(PaymentTransactionStatus.PAID);
       expect(
-        (await dataSource.getRepository(Order).findOneByOrFail({ id: order.id }))
-          .status,
+        (
+          await dataSource
+            .getRepository(Order)
+            .findOneByOrFail({ id: order.id })
+        ).status,
       ).toBe(OrderStatus.PAID);
     } finally {
       logger.mockRestore();

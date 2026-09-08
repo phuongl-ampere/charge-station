@@ -24,7 +24,9 @@ describe("PaymentPending", () => {
     ).toBeVisible();
     expect(screen.getByText("10,000 VND")).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "Check payment link" }));
+    await user.click(
+      screen.getByRole("button", { name: "Check payment link" }),
+    );
     await user.click(
       screen.getByRole("button", { name: "View charging status" }),
     );

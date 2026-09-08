@@ -1,8 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID } from "node:crypto";
 
-import { Logger } from '@nestjs/common';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { DataSource } from 'typeorm';
+import { Logger } from "@nestjs/common";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { DataSource } from "typeorm";
 
 import {
   ChargingSession,
@@ -17,21 +17,21 @@ import {
   PaymentTransactionStatus,
   PricingPlan,
   Station,
-} from '../database/data-source.js';
+} from "../database/data-source.js";
 import {
   PayosClient,
   PayosPaymentLinkAmbiguousError,
   PayosPaymentLinkDefinitiveError,
   type PayosWebhookData,
-} from './payos.client.js';
-import { PaymentsService } from './payments.service.js';
+} from "./payos.client.js";
+import { PaymentsService } from "./payments.service.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ??
-  'postgres://charge:charge@localhost:5432/charge_station';
-const schema = `task4_payments_${randomUUID().replaceAll('-', '')}`;
+  "postgres://charge:charge@localhost:5432/charge_station";
+const schema = `task4_payments_${randomUUID().replaceAll("-", "")}`;
 
-describe('PayOS payment concurrency with local PostgreSQL', () => {
+describe("PayOS payment concurrency with local PostgreSQL", () => {
   let adminDataSource: DataSource;
   let dataSource: DataSource;
   let paymentsService: PaymentsService;
@@ -39,14 +39,14 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
   let createdOrderId: string;
 
   beforeAll(async () => {
-    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
-    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-    adminDataSource = new DataSource({ type: 'postgres', url: databaseUrl });
+    vi.spyOn(Logger.prototype, "error").mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
+    adminDataSource = new DataSource({ type: "postgres", url: databaseUrl });
     await adminDataSource.initialize();
     await adminDataSource.query(`CREATE SCHEMA "${schema}"`);
 
     dataSource = new DataSource({
-      type: 'postgres',
+      type: "postgres",
       url: databaseUrl,
       entities,
       migrations,
@@ -58,59 +58,59 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
 
     const station = await dataSource.getRepository(Station).save({
       id: randomUUID(),
-      code: 'ST01',
-      name: 'PostgreSQL Test Station',
-      deviceId: 'dev_ST01',
+      code: "ST01",
+      name: "PostgreSQL Test Station",
+      deviceId: "dev_ST01",
     });
     const pricingPlan = await dataSource.getRepository(PricingPlan).save({
       id: randomUUID(),
-      name: 'PostgreSQL Test Pricing',
+      name: "PostgreSQL Test Pricing",
       hourlyPriceVnd: 5000,
       allowedDurationsMinutes: [60, 120, 180],
     });
     await dataSource.getRepository(Connector).save({
       id: randomUUID(),
-      code: 'ST01-C01',
+      code: "ST01-C01",
       status: ConnectorStatus.AVAILABLE,
       station,
       pricingPlan,
     });
     await dataSource.getRepository(Connector).save({
       id: randomUUID(),
-      code: 'ST01-C02',
+      code: "ST01-C02",
       status: ConnectorStatus.AVAILABLE,
       station,
       pricingPlan,
     });
     await dataSource.getRepository(Connector).save({
       id: randomUUID(),
-      code: 'ST01-C03',
+      code: "ST01-C03",
       status: ConnectorStatus.AVAILABLE,
       station,
       pricingPlan,
     });
     await dataSource.getRepository(Connector).save({
       id: randomUUID(),
-      code: 'ST01-C04',
+      code: "ST01-C04",
       status: ConnectorStatus.AVAILABLE,
       station,
       pricingPlan,
     });
     await dataSource.getRepository(Connector).save({
       id: randomUUID(),
-      code: 'ST01-C05',
+      code: "ST01-C05",
       status: ConnectorStatus.AVAILABLE,
       station,
       pricingPlan,
     });
 
     payosClient = new PayosClient({
-      mode: 'mock',
-      clientId: 'client-id',
-      apiKey: 'api-key',
-      checksumKey: 'checksum-key',
-      returnUrl: 'http://localhost:5173/charge/return',
-      cancelUrl: 'http://localhost:5173/charge/cancel',
+      mode: "mock",
+      clientId: "client-id",
+      apiKey: "api-key",
+      checksumKey: "checksum-key",
+      returnUrl: "http://localhost:5173/charge/return",
+      cancelUrl: "http://localhost:5173/charge/cancel",
     });
     paymentsService = new PaymentsService(dataSource, payosClient);
   });
@@ -126,24 +126,24 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
     }
   });
 
-  it('compensates a rejected provider link and allows the connector to be ordered again', async () => {
+  it("compensates a rejected provider link and allows the connector to be ordered again", async () => {
     const createPaymentLink = vi
-      .spyOn(payosClient, 'createPaymentLink')
+      .spyOn(payosClient, "createPaymentLink")
       .mockRejectedValueOnce(
-        new PayosPaymentLinkDefinitiveError('PayOS provider rejected'),
+        new PayosPaymentLinkDefinitiveError("PayOS provider rejected"),
       );
 
     await expect(
       paymentsService.createOrder({
-        connectorCode: 'ST01-C02',
+        connectorCode: "ST01-C02",
         durationMinutes: 60,
       }),
-    ).rejects.toThrow('PayOS provider rejected');
+    ).rejects.toThrow("PayOS provider rejected");
 
     const failedPayment = await dataSource
       .getRepository(PaymentTransaction)
       .findOneOrFail({
-        where: { order: { connector: { code: 'ST01-C02' } } },
+        where: { order: { connector: { code: "ST01-C02" } } },
         relations: { order: { connector: true } },
       });
 
@@ -156,37 +156,37 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
 
     await expect(
       paymentsService.createOrder({
-        connectorCode: 'ST01-C02',
+        connectorCode: "ST01-C02",
         durationMinutes: 60,
       }),
     ).resolves.toMatchObject({
       payment: {
-        provider: 'PAYOS',
+        provider: "PAYOS",
         checkoutUrl: expect.any(String),
       },
     });
     expect(createPaymentLink).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps an ambiguous provider outcome pending so a signed PAID webhook creates a session', async () => {
+  it("keeps an ambiguous provider outcome pending so a signed PAID webhook creates a session", async () => {
     const createPaymentLink = vi
-      .spyOn(payosClient, 'createPaymentLink')
+      .spyOn(payosClient, "createPaymentLink")
       .mockRejectedValue(
-        new PayosPaymentLinkAmbiguousError('PayOS payment creation timed out'),
+        new PayosPaymentLinkAmbiguousError("PayOS payment creation timed out"),
       );
     const getPaymentLinkInfo = vi
-      .spyOn(payosClient, 'getPaymentLinkInfo')
+      .spyOn(payosClient, "getPaymentLinkInfo")
       .mockRejectedValue(
-        new PayosPaymentLinkAmbiguousError('PayOS lookup is unavailable'),
+        new PayosPaymentLinkAmbiguousError("PayOS lookup is unavailable"),
       );
 
     try {
       const created = await paymentsService.createOrder({
-        connectorCode: 'ST01-C03',
+        connectorCode: "ST01-C03",
         durationMinutes: 60,
       });
       expect(created.payment).toEqual({
-        provider: 'PAYOS',
+        provider: "PAYOS",
         paymentPending: true,
       });
       expect(createPaymentLink).toHaveBeenCalledTimes(1);
@@ -207,11 +207,11 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
       const data: PayosWebhookData = {
         orderCode: Number(payment.order.payosOrderCode),
         amount: payment.order.amountVnd,
-        paymentLinkId: 'payos_' + payment.order.payosOrderCode,
-        status: 'PAID',
+        paymentLinkId: "payos_" + payment.order.payosOrderCode,
+        status: "PAID",
       };
       await paymentsService.handleWebhook({
-        code: '00',
+        code: "00",
         success: true,
         data,
         signature: payosClient.signWebhook(data),
@@ -240,14 +240,14 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
     }
   });
 
-  it('allows exactly one concurrent pending order to reserve a connector', async () => {
+  it("allows exactly one concurrent pending order to reserve a connector", async () => {
     const results = await Promise.allSettled([
       paymentsService.createOrder({
-        connectorCode: 'ST01-C01',
+        connectorCode: "ST01-C01",
         durationMinutes: 120,
       }),
       paymentsService.createOrder({
-        connectorCode: 'ST01-C01',
+        connectorCode: "ST01-C01",
         durationMinutes: 120,
       }),
     ]);
@@ -256,32 +256,32 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
       (
         result,
       ): result is PromiseFulfilledResult<
-        Awaited<ReturnType<PaymentsService['createOrder']>>
-      > => result.status === 'fulfilled',
+        Awaited<ReturnType<PaymentsService["createOrder"]>>
+      > => result.status === "fulfilled",
     );
 
     expect(successfulResult).toBeDefined();
     expect(
-      results.filter((result) => result.status === 'rejected'),
+      results.filter((result) => result.status === "rejected"),
     ).toHaveLength(1);
     createdOrderId = successfulResult!.value.orderId;
     expect(
       await dataSource.getRepository(Order).count({
-        where: { connector: { code: 'ST01-C01' } },
+        where: { connector: { code: "ST01-C01" } },
       }),
     ).toBe(1);
     expect(
       (
         await dataSource
           .getRepository(Connector)
-          .findOneByOrFail({ code: 'ST01-C01' })
+          .findOneByOrFail({ code: "ST01-C01" })
       ).status,
     ).toBe(ConnectorStatus.OCCUPIED);
   });
 
-  it('expires one overdue reservation across concurrent PostgreSQL reaper passes', async () => {
+  it("expires one overdue reservation across concurrent PostgreSQL reaper passes", async () => {
     const created = await paymentsService.createOrder({
-      connectorCode: 'ST01-C04',
+      connectorCode: "ST01-C04",
       durationMinutes: 60,
     });
     const payment = await dataSource
@@ -312,9 +312,9 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
     expect(expired.order.connector.status).toBe(ConnectorStatus.AVAILABLE);
   });
 
-  it('leaves a fresh persisted checkout pending during a reaper pass', async () => {
+  it("leaves a fresh persisted checkout pending during a reaper pass", async () => {
     const created = await paymentsService.createOrder({
-      connectorCode: 'ST01-C05',
+      connectorCode: "ST01-C05",
       durationMinutes: 60,
     });
     const payment = await dataSource
@@ -339,7 +339,7 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
     expect(persisted.order.connector.status).toBe(ConnectorStatus.OCCUPIED);
   });
 
-  it('creates one charging session and command for concurrent duplicate paid webhooks', async () => {
+  it("creates one charging session and command for concurrent duplicate paid webhooks", async () => {
     const order = await dataSource
       .getRepository(Order)
       .findOneByOrFail({ id: createdOrderId });
@@ -347,10 +347,10 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
       orderCode: Number(order.payosOrderCode),
       amount: order.amountVnd,
       paymentLinkId: `mock_${order.payosOrderCode}`,
-      status: 'PAID',
+      status: "PAID",
     };
     const body = {
-      code: '00',
+      code: "00",
       success: true,
       data,
       signature: payosClient.signWebhook(data),

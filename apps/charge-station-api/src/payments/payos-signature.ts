@@ -1,17 +1,24 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 type PayosData = Record<string, unknown>;
 
 function serializePayosData(data: PayosData): string {
   return Object.entries(data)
-    .filter(([, value]) => value !== '' && value !== null && value !== undefined)
+    .filter(
+      ([, value]) => value !== "" && value !== null && value !== undefined,
+    )
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, value]) => `${key}=${String(value)}`)
-    .join('&');
+    .join("&");
 }
 
-export function buildPayosSignature(data: PayosData, checksumKey: string): string {
-  return createHmac('sha256', checksumKey).update(serializePayosData(data)).digest('hex');
+export function buildPayosSignature(
+  data: PayosData,
+  checksumKey: string,
+): string {
+  return createHmac("sha256", checksumKey)
+    .update(serializePayosData(data))
+    .digest("hex");
 }
 
 export function verifyPayosSignature(
@@ -19,8 +26,10 @@ export function verifyPayosSignature(
   signature: string,
   checksumKey: string,
 ): boolean {
-  const expected = Buffer.from(buildPayosSignature(data, checksumKey), 'hex');
-  const received = Buffer.from(signature, 'hex');
+  const expected = Buffer.from(buildPayosSignature(data, checksumKey), "hex");
+  const received = Buffer.from(signature, "hex");
 
-  return received.length === expected.length && timingSafeEqual(received, expected);
+  return (
+    received.length === expected.length && timingSafeEqual(received, expected)
+  );
 }

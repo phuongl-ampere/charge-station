@@ -1,20 +1,20 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
-import type { INestApplication } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
-import jwt from 'jsonwebtoken';
-import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { Repository } from 'typeorm';
+import { Controller, Get, UseGuards } from "@nestjs/common";
+import type { INestApplication } from "@nestjs/common";
+import { Test } from "@nestjs/testing";
+import jwt from "jsonwebtoken";
+import request from "supertest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Repository } from "typeorm";
 
-import { User } from '../database/data-source.js';
-import { AuthService } from './auth.service.js';
-import { JwtAuthGuard } from './jwt-auth.guard.js';
+import { User } from "../database/data-source.js";
+import { AuthService } from "./auth.service.js";
+import { JwtAuthGuard } from "./jwt-auth.guard.js";
 
-process.env.JWT_SECRET = 'test-only-jwt-secret';
+process.env.JWT_SECRET = "test-only-jwt-secret";
 const testAuthService = new AuthService({} as Repository<User>);
 const testAuthGuard = new JwtAuthGuard(testAuthService);
 
-@Controller('protected')
+@Controller("protected")
 class ProtectedTestController {
   @Get()
   @UseGuards(testAuthGuard)
@@ -23,7 +23,7 @@ class ProtectedTestController {
   }
 }
 
-describe('JwtAuthGuard HTTP errors', () => {
+describe("JwtAuthGuard HTTP errors", () => {
   let app: INestApplication;
 
   beforeAll(async () => {
@@ -40,23 +40,23 @@ describe('JwtAuthGuard HTTP errors', () => {
     await app.close();
   });
 
-  it('maps malformed JWTs to HTTP 401', async () => {
+  it("maps malformed JWTs to HTTP 401", async () => {
     await request(app.getHttpServer())
-      .get('/protected')
-      .set('Authorization', 'Bearer not-a-jwt')
+      .get("/protected")
+      .set("Authorization", "Bearer not-a-jwt")
       .expect(401);
   });
 
-  it('maps expired JWTs to HTTP 401', async () => {
+  it("maps expired JWTs to HTTP 401", async () => {
     const expiredToken = jwt.sign(
-      { sub: 'user-1', role: 'CUSTOMER' },
-      'test-only-jwt-secret',
+      { sub: "user-1", role: "CUSTOMER" },
+      "test-only-jwt-secret",
       { expiresIn: -1 },
     );
 
     await request(app.getHttpServer())
-      .get('/protected')
-      .set('Authorization', `Bearer ${expiredToken}`)
+      .get("/protected")
+      .set("Authorization", `Bearer ${expiredToken}`)
       .expect(401);
   });
 });

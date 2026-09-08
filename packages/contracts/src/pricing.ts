@@ -6,7 +6,7 @@ export function calculateAmountVnd(durationMinutes: number): number {
     durationMinutes <= 0 ||
     durationMinutes % 60 !== 0
   ) {
-    throw new Error('Duration must be a whole number of hours');
+    throw new Error("Duration must be a whole number of hours");
   }
 
   return (durationMinutes / 60) * HOURLY_PRICE_VND;

@@ -3,10 +3,10 @@ import {
   ExecutionContext,
   Injectable,
   UnauthorizedException,
-} from '@nestjs/common';
-import type { Request } from 'express';
+} from "@nestjs/common";
+import type { Request } from "express";
 
-import { AuthService, type AuthTokenPayload } from './auth.service.js';
+import { AuthService, type AuthTokenPayload } from "./auth.service.js";
 
 export type AuthenticatedRequest = Request & {
   user: AuthTokenPayload;
@@ -19,11 +19,13 @@ export class JwtAuthGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const authorization = request.headers.authorization;
-    if (!authorization?.startsWith('Bearer ')) {
-      throw new UnauthorizedException('Bearer token is required');
+    if (!authorization?.startsWith("Bearer ")) {
+      throw new UnauthorizedException("Bearer token is required");
     }
 
-    request.user = this.authService.verifyToken(authorization.slice('Bearer '.length));
+    request.user = this.authService.verifyToken(
+      authorization.slice("Bearer ".length),
+    );
     return true;
   }
 }

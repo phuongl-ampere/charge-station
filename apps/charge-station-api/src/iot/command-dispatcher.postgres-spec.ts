@@ -152,9 +152,11 @@ describe("CommandDispatcherService claim concurrency with local PostgreSQL", () 
     releaseSend?.();
     await Promise.all([firstDispatch, secondDispatch]);
     expect(
-      (await dataSource.getRepository(DeviceCommand).findOneByOrFail({
-        id: command.id,
-      })).status,
+      (
+        await dataSource.getRepository(DeviceCommand).findOneByOrFail({
+          id: command.id,
+        })
+      ).status,
     ).toBe(DeviceCommandStatus.SENT);
     first.onApplicationShutdown();
     second.onApplicationShutdown();

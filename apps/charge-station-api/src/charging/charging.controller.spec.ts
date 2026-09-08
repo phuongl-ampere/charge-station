@@ -498,9 +498,8 @@ describe("ChargingController", () => {
 
   it("returns accepted after queuing a readiness-gated stop dispatch", async () => {
     const dispatchWhenIotReady = vi.fn();
-    const { commandRepository, service } = createStopHarness(
-      dispatchWhenIotReady,
-    );
+    const { commandRepository, service } =
+      createStopHarness(dispatchWhenIotReady);
 
     const response = await service.stopSession("ses_1");
 
