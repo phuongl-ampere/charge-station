@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { Inject, Injectable, Logger } from "@nestjs/common";
+import {
+  Inject,
+  Injectable,
+  Logger,
+  type OnModuleDestroy,
+  type OnModuleInit,
+  Optional,
+} from "@nestjs/common";
 import type {
   DeviceEvent,
   StartChargingCommand,
@@ -10,9 +17,12 @@ import {
   type CommandResponse,
   DeviceStateService,
   type DeviceRuntimeState,
-  type PendingCriticalDelivery,
 } from "../devices/device-state.service.js";
 import { ChargeStationEventClient } from "../events/charge-station-event.client.js";
+import {
+  EventJournalService,
+  type JournalRecord,
+} from "../events/event-journal.service.js";
 
 type FailureMode = "none" | "timeout" | "offline" | "command_failed";
 type StopReason =
@@ -32,16 +42,41 @@ const STATE_CRITICAL_EVENT_TYPES = new Set<DeviceEvent["type"]>([
 const CRITICAL_RETRY_DELAYS_MS = [100, 500, 1_000] as const;
 
 @Injectable()
-export class CommandsService {
+export class CommandsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(CommandsService.name);
   private readonly eventQueues = new Map<string, Promise<void>>();
+  private readonly retryTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
+  private acceptingDeliveries = true;
 
   constructor(
     @Inject(ChargeStationEventClient)
     private readonly eventClient: ChargeStationEventClient,
     @Inject(DeviceStateService)
     private readonly deviceState: DeviceStateService = new DeviceStateService(),
+    @Optional()
+    @Inject(EventJournalService)
+    private readonly eventJournal: EventJournalService = new EventJournalService(),
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    const records = await this.eventJournal.initialize();
+    for (const record of records) {
+      this.enqueueCriticalRecord(record);
+    }
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    this.acceptingDeliveries = false;
+    for (const timer of this.retryTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.retryTimers.clear();
+    this.eventQueues.clear();
+    await this.eventJournal.onModuleDestroy();
+  }
 
   async start(command: StartChargingCommand): Promise<CommandResponse> {
     if (!hasUnexpiredStartExpiry(command.expiresAt)) {
@@ -216,10 +251,7 @@ export class CommandsService {
     };
 
     if (STATE_CRITICAL_EVENT_TYPES.has(type)) {
-      const delivery = this.deviceState.createCriticalDelivery(state, event);
-      this.enqueueEvent(event.sessionId, () =>
-        this.deliverCriticalEvent(state, delivery),
-      );
+      void this.persistCriticalEvent(event);
       return;
     }
 
@@ -235,7 +267,7 @@ export class CommandsService {
   private enqueueEvent(sessionId: string, deliver: () => Promise<void>): void {
     const previousDelivery =
       this.eventQueues.get(sessionId) ?? Promise.resolve();
-    const delivery = previousDelivery.then(deliver);
+    const delivery = previousDelivery.catch(() => undefined).then(deliver);
 
     this.eventQueues.set(sessionId, delivery);
     void delivery.then(
@@ -252,28 +284,83 @@ export class CommandsService {
     );
   }
 
-  private async deliverCriticalEvent(
-    state: DeviceRuntimeState,
-    delivery: PendingCriticalDelivery,
-  ): Promise<void> {
-    while (
-      this.deviceState.getCriticalDelivery(state, delivery.event.eventId) ===
-      delivery
-    ) {
-      try {
-        await this.eventClient.post(delivery.event);
-        this.deviceState.acknowledgeCriticalDelivery(
-          state,
-          delivery.event.eventId,
-        );
-        return;
-      } catch (error: unknown) {
-        this.logEventDeliveryFailure(delivery.event, error);
-        await this.deviceState.waitForCriticalRetry(
-          delivery,
-          this.criticalRetryDelay(delivery.retryCount),
-        );
+  private persistCriticalEvent(event: DeviceEvent): void {
+    try {
+      const record = this.eventJournal.append(event);
+      this.enqueueCriticalRecord(record);
+    } catch (error: unknown) {
+      this.logEventDeliveryFailure(event, error);
+    }
+  }
+
+  private enqueueCriticalRecord(record: JournalRecord): void {
+    if (!this.acceptingDeliveries || record.delivered) {
+      return;
+    }
+
+    const nextAttemptAt = record.nextAttemptAt
+      ? new Date(record.nextAttemptAt)
+      : undefined;
+    const delayMs = nextAttemptAt
+      ? Math.max(0, nextAttemptAt.valueOf() - Date.now())
+      : 0;
+    if (delayMs > 0) {
+      this.scheduleCriticalRetry(record, delayMs);
+      return;
+    }
+
+    this.enqueueEvent(record.event.sessionId, () =>
+      this.deliverCriticalEvent(record),
+    );
+  }
+
+  private async deliverCriticalEvent(record: JournalRecord): Promise<void> {
+    if (!this.acceptingDeliveries || record.delivered) {
+      return;
+    }
+
+    try {
+      await this.eventClient.post(record.event);
+      await this.eventJournal.markDelivered(record.event.eventId);
+      this.clearCriticalRetry(record.event.eventId);
+    } catch (error: unknown) {
+      this.logEventDeliveryFailure(record.event, error);
+      const retryCount = record.retryCount + 1;
+      const delayMs = this.criticalRetryDelay(record.retryCount);
+      const updated = await this.eventJournal.recordRetry(
+        record.event.eventId,
+        retryCount,
+        new Date(Date.now() + delayMs),
+      );
+      if (updated) {
+        this.scheduleCriticalRetry(updated, delayMs);
       }
+    }
+  }
+
+  private scheduleCriticalRetry(record: JournalRecord, delayMs: number): void {
+    if (
+      !this.acceptingDeliveries ||
+      this.retryTimers.has(record.event.eventId)
+    ) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      this.retryTimers.delete(record.event.eventId);
+      this.enqueueEvent(record.event.sessionId, () =>
+        this.deliverCriticalEvent(record),
+      );
+    }, delayMs);
+    this.retryTimers.set(record.event.eventId, timer);
+    (timer as unknown as { unref?: () => void }).unref?.();
+  }
+
+  private clearCriticalRetry(eventId: string): void {
+    const timer = this.retryTimers.get(eventId);
+    if (timer) {
+      clearTimeout(timer);
+      this.retryTimers.delete(eventId);
     }
   }
 

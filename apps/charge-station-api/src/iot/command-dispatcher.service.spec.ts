@@ -45,19 +45,26 @@ describe("CommandDispatcherService", () => {
       stationCode: "ST01",
       connectorCode: "ST01-C01",
       durationSeconds: 7200,
-      expiresAt: "2026-09-08T12:00:00.000Z",
+      expiresAt: command.payload.expiresAt,
       configVersion: 1,
     });
     expect(command.status).toBe(DeviceCommandStatus.SENT);
-    expect(commandRepository.update).toHaveBeenCalledWith(
-      {
+    expect(commandRepository.update).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
         commandId: command.commandId,
         status: DeviceCommandStatus.PENDING,
-      },
-      {
-        status: DeviceCommandStatus.SENT,
-        nextAttemptAt: null,
-      },
+        dispatchVersion: 0,
+      }),
+      expect.objectContaining({ status: DeviceCommandStatus.DISPATCHING }),
+    );
+    expect(commandRepository.update).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        commandId: command.commandId,
+        status: DeviceCommandStatus.DISPATCHING,
+      }),
+      expect.objectContaining({ status: DeviceCommandStatus.SENT }),
     );
   });
 
@@ -66,10 +73,16 @@ describe("CommandDispatcherService", () => {
     const commandRepository = {
       findOne: vi.fn().mockResolvedValue(command),
       save: vi.fn().mockImplementation(async (entity) => entity),
-      update: vi.fn().mockImplementation(async () => {
-        command.status = DeviceCommandStatus.ACCEPTED;
-        return { affected: 0 };
-      }),
+      update: vi
+        .fn()
+        .mockImplementationOnce(async (_criteria, values) => {
+          Object.assign(command, values, { dispatchVersion: 1 });
+          return { affected: 1 };
+        })
+        .mockImplementationOnce(async () => {
+          command.status = DeviceCommandStatus.ACCEPTED;
+          return { affected: 0 };
+        }),
     };
     const dataSource = {
       getRepository: vi.fn().mockReturnValue(commandRepository),
@@ -84,18 +97,76 @@ describe("CommandDispatcherService", () => {
 
     await service.dispatch(command.commandId);
 
-    expect(commandRepository.update).toHaveBeenCalledWith(
-      {
+    expect(commandRepository.update).toHaveBeenCalledTimes(2);
+    expect(commandRepository.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
         commandId: command.commandId,
-        status: DeviceCommandStatus.PENDING,
-      },
-      {
-        status: DeviceCommandStatus.SENT,
-        nextAttemptAt: null,
-      },
+        status: DeviceCommandStatus.DISPATCHING,
+      }),
+      expect.objectContaining({ status: DeviceCommandStatus.SENT }),
     );
     expect(commandRepository.save).not.toHaveBeenCalled();
     expect(command.status).toBe(DeviceCommandStatus.ACCEPTED);
+  });
+
+  it("does not overwrite a FAILED command when the device event path wins after send", async () => {
+    const command = createCommand();
+    const commandRepository = {
+      findOne: vi.fn().mockResolvedValue(command),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+      update: vi
+        .fn()
+        .mockImplementationOnce(async (_criteria, values) => {
+          Object.assign(command, values, { dispatchVersion: 1 });
+          return { affected: 1 };
+        })
+        .mockImplementationOnce(async () => {
+          command.status = DeviceCommandStatus.FAILED;
+          return { affected: 0 };
+        }),
+    };
+    const dataSource = {
+      getRepository: vi.fn().mockReturnValue(commandRepository),
+    };
+    const iotClient = { start: vi.fn().mockResolvedValue(undefined) };
+    const service = new CommandDispatcherService(
+      dataSource as unknown as DataSource,
+      iotClient as unknown as IotServiceClient,
+    );
+
+    await service.dispatch(command.commandId);
+
+    expect(iotClient.start).toHaveBeenCalledOnce();
+    expect(command.status).toBe(DeviceCommandStatus.FAILED);
+  });
+
+  it("reclaims a stale persisted dispatch lease before sending", async () => {
+    const command = createCommand({
+      status: DeviceCommandStatus.DISPATCHING,
+      dispatchClaimToken: "stale-claim",
+      dispatchClaimedAt: new Date(Date.now() - 31_000),
+      dispatchVersion: 1,
+    });
+    const commandRepository = {
+      findOne: vi.fn().mockResolvedValue(command),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+      update: conditionalCommandUpdate(command),
+    };
+    const dataSource = {
+      getRepository: vi.fn().mockReturnValue(commandRepository),
+    };
+    const iotClient = { start: vi.fn().mockResolvedValue(undefined) };
+    const service = new CommandDispatcherService(
+      dataSource as unknown as DataSource,
+      iotClient as unknown as IotServiceClient,
+    );
+
+    await service.dispatch(command.commandId);
+
+    expect(iotClient.start).toHaveBeenCalledOnce();
+    expect(command.status).toBe(DeviceCommandStatus.SENT);
+    expect(commandRepository.update).toHaveBeenCalledTimes(3);
+    service.onApplicationShutdown();
   });
 
   it("sends a persisted stop command through the same dispatcher", async () => {
@@ -191,7 +262,7 @@ describe("CommandDispatcherService", () => {
     expect(command.retryCount).toBe(3);
     expect(command.status).toBe(DeviceCommandStatus.SENT);
     expect(command.nextAttemptAt).toBeNull();
-    expect(saves).toEqual([
+    expect(saves.filter((save) => save.status !== DeviceCommandStatus.DISPATCHING)).toEqual([
       {
         retryCount: 1,
         nextAttemptAt: new Date("2026-09-08T11:00:01.000Z"),
@@ -464,7 +535,10 @@ describe("CommandDispatcherService", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(iotClient.isHealthy).toHaveBeenCalledTimes(3);
       expect(commandRepository.find).toHaveBeenCalledWith({
-        where: { status: DeviceCommandStatus.PENDING },
+        where: [
+          { status: DeviceCommandStatus.PENDING },
+          { status: DeviceCommandStatus.DISPATCHING },
+        ],
       });
       expect(dispatch).toHaveBeenCalledTimes(1);
       expect(dispatch).toHaveBeenCalledWith(command.commandId);
@@ -519,7 +593,7 @@ describe("CommandDispatcherService", () => {
       expect(iotClient.start).toHaveBeenCalledTimes(1);
       expect(command.retryCount).toBe(0);
       expect(command.status).toBe(DeviceCommandStatus.SENT);
-      expect(commandRepository.update).toHaveBeenCalledTimes(1);
+      expect(commandRepository.update).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
@@ -753,6 +827,7 @@ describe("CommandDispatcherService", () => {
 });
 
 function createCommand(overrides: Partial<DeviceCommand> = {}): DeviceCommand {
+  const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1_000).toISOString();
   const connector = {
     id: randomUUID(),
     code: "ST01-C01",
@@ -763,7 +838,7 @@ function createCommand(overrides: Partial<DeviceCommand> = {}): DeviceCommand {
     id: randomUUID(),
     connector,
     status: ChargingSessionStatus.PENDING,
-    expectedEndAt: new Date("2026-09-08T12:00:00.000Z"),
+    expectedEndAt: new Date(expiresAt),
   } as ChargingSession;
 
   return {
@@ -775,13 +850,16 @@ function createCommand(overrides: Partial<DeviceCommand> = {}): DeviceCommand {
       connectorCode: "ST01-C01",
       sessionId: session.id,
       durationSeconds: 7200,
-      expiresAt: "2026-09-08T12:00:00.000Z",
+      expiresAt,
       configVersion: 1,
     },
     retryCount: 0,
     status: DeviceCommandStatus.PENDING,
     session,
     nextAttemptAt: null,
+    dispatchClaimToken: null,
+    dispatchClaimedAt: null,
+    dispatchVersion: 0,
     ...overrides,
   } as unknown as DeviceCommand;
 }
@@ -790,12 +868,21 @@ function conditionalCommandUpdate(command: DeviceCommand) {
   return vi.fn().mockImplementation(async (criteria, values) => {
     if (
       criteria.commandId !== command.commandId ||
-      criteria.status !== DeviceCommandStatus.PENDING ||
-      command.status !== DeviceCommandStatus.PENDING
+      criteria.status !== command.status ||
+      ("dispatchVersion" in criteria &&
+        criteria.dispatchVersion !== command.dispatchVersion) ||
+      ("dispatchClaimToken" in criteria &&
+        criteria.dispatchClaimToken !== command.dispatchClaimToken)
     ) {
       return { affected: 0 };
     }
-    Object.assign(command, values);
+    const { dispatchVersion, ...otherValues } = values;
+    Object.assign(command, otherValues);
+    if (typeof dispatchVersion === "function") {
+      command.dispatchVersion = (command.dispatchVersion ?? 0) + 1;
+    } else if (dispatchVersion !== undefined) {
+      command.dispatchVersion = dispatchVersion;
+    }
     return { affected: 1 };
   });
 }

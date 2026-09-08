@@ -255,8 +255,176 @@ describe('PayOS payment API', () => {
         await dataSource
           .getRepository(Connector)
           .findOneByOrFail({ code: 'ST01-C01' })
+    ).status,
+    ).toBe(ConnectorStatus.AVAILABLE);
+  });
+
+  it('expires a valid paid webhook at the reservation deadline without creating a session', async () => {
+    const created = await createOrder();
+    const payment = await dataSource
+      .getRepository(PaymentTransaction)
+      .findOneOrFail({
+        where: { order: { id: created.body.orderId } },
+        relations: { order: true },
+      });
+    await dataSource.getRepository(PaymentTransaction).update(payment.id, {
+      expiresAt: new Date(Date.now() - 1),
+    });
+    const data: PayosWebhookData = {
+      orderCode: Number(payment.order.payosOrderCode),
+      amount: payment.order.amountVnd,
+      paymentLinkId: `mock_${payment.order.payosOrderCode}`,
+      status: 'PAID',
+    };
+
+    await request(app.getHttpServer())
+      .post('/payments/payos/webhook')
+      .send({
+        code: '00',
+        success: true,
+        data,
+        signature: payosClient.signWebhook(data),
+      })
+      .expect(201);
+
+    expect(
+      (
+        await dataSource
+          .getRepository(PaymentTransaction)
+          .findOneByOrFail({ id: payment.id })
+      ).status,
+    ).toBe(PaymentTransactionStatus.EXPIRED);
+    expect(
+      (await dataSource.getRepository(Order).findOneByOrFail({ id: payment.order.id }))
+        .status,
+    ).toBe(OrderStatus.EXPIRED);
+    expect(
+      await dataSource
+        .getRepository(ChargingSession)
+        .countBy({ order: { id: payment.order.id } }),
+    ).toBe(0);
+    expect(
+      (
+        await dataSource
+          .getRepository(Connector)
+          .findOneByOrFail({ code: 'ST01-C01' })
       ).status,
     ).toBe(ConnectorStatus.AVAILABLE);
+  });
+
+  it('keeps an expired reservation held when provider cancellation fails and releases it after retry success', async () => {
+    const created = await createOrder();
+    const payment = await dataSource
+      .getRepository(PaymentTransaction)
+      .findOneOrFail({
+        where: { order: { id: created.body.orderId } },
+        relations: { order: { connector: true } },
+      });
+    await dataSource.getRepository(PaymentTransaction).update(payment.id, {
+      expiresAt: new Date(Date.now() - 1),
+    });
+    const cancellation = vi
+      .spyOn(payosClient, 'cancelPaymentLink')
+      .mockRejectedValueOnce(new Error('provider unavailable'))
+      .mockResolvedValueOnce(undefined);
+    const paymentsService = app.get(PaymentsService);
+
+    try {
+      await expect(paymentsService.expireDueReservations()).resolves.toBe(0);
+
+      const pending = await dataSource
+        .getRepository(PaymentTransaction)
+        .findOneOrFail({
+          where: { id: payment.id },
+          relations: { order: { connector: true } },
+        });
+      expect(pending.status).toBe(PaymentTransactionStatus.PENDING);
+      expect(pending.order.status).toBe(OrderStatus.PENDING_PAYMENT);
+      expect(pending.order.connector.status).toBe(ConnectorStatus.OCCUPIED);
+      expect(
+        (pending as PaymentTransaction & {
+          cancellationStatus?: string;
+          cancellationAttempts?: number;
+        }).cancellationStatus,
+      ).toBe('PENDING');
+      expect(
+        (pending as PaymentTransaction & { cancellationAttempts?: number })
+          .cancellationAttempts,
+      ).toBe(1);
+
+      await expect(
+        paymentsService.expireDueReservations(new Date(Date.now() + 60_000)),
+      ).resolves.toBe(1);
+      const expired = await dataSource
+        .getRepository(PaymentTransaction)
+        .findOneOrFail({
+          where: { id: payment.id },
+          relations: { order: { connector: true } },
+        });
+      expect(expired.status).toBe(PaymentTransactionStatus.EXPIRED);
+      expect(expired.order.status).toBe(OrderStatus.EXPIRED);
+      expect(expired.order.connector.status).toBe(ConnectorStatus.AVAILABLE);
+      expect(cancellation).toHaveBeenCalledTimes(2);
+    } finally {
+      cancellation.mockRestore();
+    }
+  });
+
+  it('processes a provider-reported paid reservation during cancellation reconciliation', async () => {
+    const created = await createOrder();
+    const payment = await dataSource
+      .getRepository(PaymentTransaction)
+      .findOneOrFail({
+        where: { order: { id: created.body.orderId } },
+        relations: { order: true },
+      });
+    await dataSource.getRepository(PaymentTransaction).update(payment.id, {
+      expiresAt: new Date(Date.now() - 1),
+    });
+    const cancellation = vi
+      .spyOn(payosClient, 'cancelPaymentLink')
+      .mockRejectedValueOnce(new Error('provider cancellation timed out'));
+    const provider = payosClient as unknown as {
+      getPaymentLinkStatus: (orderCode: number) => Promise<unknown>;
+    };
+    const providerStatus = vi.fn().mockResolvedValue({
+      status: 'PAID',
+      amount: payment.order.amountVnd,
+      paymentLinkId: `mock_${payment.order.payosOrderCode}`,
+    });
+    Object.defineProperty(provider, 'getPaymentLinkStatus', {
+      configurable: true,
+      value: providerStatus,
+    });
+    const paymentsService = app.get(PaymentsService);
+
+    try {
+      await expect(paymentsService.expireDueReservations()).resolves.toBe(1);
+
+      expect(
+        (
+          await dataSource
+            .getRepository(PaymentTransaction)
+            .findOneByOrFail({ id: payment.id })
+        ).status,
+      ).toBe(PaymentTransactionStatus.PAID);
+      expect(
+        await dataSource
+          .getRepository(ChargingSession)
+          .countBy({ order: { id: payment.order.id } }),
+      ).toBe(1);
+      expect(
+        await dataSource
+          .getRepository(DeviceCommand)
+          .countBy({ session: { order: { id: payment.order.id } } }),
+      ).toBe(1);
+      expect(providerStatus).toHaveBeenCalledWith(
+        Number(payment.order.payosOrderCode),
+      );
+    } finally {
+      cancellation.mockRestore();
+      delete (provider as { getPaymentLinkStatus?: unknown }).getPaymentLinkStatus;
+    }
   });
 
   it('marks a signed paid webhook once and creates one session and start command', async () => {

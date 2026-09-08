@@ -218,6 +218,51 @@ describe("PayosClient mock provider", () => {
     expect(post).not.toHaveBeenCalled();
   });
 
+  it("reports a deterministic pending status for a local checkout", async () => {
+    const client = new PayosClient({
+      mode: "mock",
+      clientId: "client-id",
+      apiKey: "api-key",
+      checksumKey: "checksum-key",
+      returnUrl: "http://localhost:5173/charge/return",
+      cancelUrl: "http://localhost:5173/charge/cancel",
+    });
+    const statusClient = client as unknown as {
+      getPaymentLinkStatus(orderCode: number): Promise<unknown>;
+    };
+
+    await expect(statusClient.getPaymentLinkStatus(100001)).resolves.toEqual({
+      status: "PENDING",
+      paymentLinkId: "mock_100001",
+    });
+  });
+
+  it("reads a definitive paid status from a live payment-link lookup", async () => {
+    const get = vi.spyOn(axios, "get").mockResolvedValue({
+      data: {
+        code: "00",
+        data: {
+          amount: 10000,
+          paymentLinkId: "pl_100001",
+          status: "PAID",
+        },
+      },
+    } as never);
+    const statusClient = createLiveClient() as unknown as {
+      getPaymentLinkStatus(orderCode: number): Promise<unknown>;
+    };
+
+    await expect(statusClient.getPaymentLinkStatus(100001)).resolves.toEqual({
+      status: "PAID",
+      amount: 10000,
+      paymentLinkId: "pl_100001",
+    });
+    expect(get).toHaveBeenCalledWith(
+      "https://api-merchant.payos.vn/v2/payment-requests/100001",
+      expect.objectContaining({ timeout: 10_000 }),
+    );
+  });
+
   it("uses PayOS client credentials when cancelling a live payment link", async () => {
     const post = vi.spyOn(axios, "post").mockResolvedValue({} as never);
 

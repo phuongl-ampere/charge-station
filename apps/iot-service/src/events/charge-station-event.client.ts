@@ -1,6 +1,9 @@
 import { Injectable } from "@nestjs/common";
 import type { DeviceEvent } from "@charge-station/contracts";
 
+const DEFAULT_EVENT_REQUEST_TIMEOUT_MS = 3_000;
+const MAX_EVENT_REQUEST_TIMEOUT_MS = 60_000;
+
 @Injectable()
 export class ChargeStationEventClient {
   async post(event: DeviceEvent): Promise<void> {
@@ -18,6 +21,7 @@ export class ChargeStationEventClient {
         "x-service-token": serviceToken,
       },
       body: JSON.stringify(event),
+      signal: AbortSignal.timeout(eventRequestTimeoutMs()),
     });
 
     if (!response.ok) {
@@ -65,4 +69,12 @@ export class ChargeStationEventClient {
     baseUrl.hash = "";
     return baseUrl.toString();
   }
+}
+
+function eventRequestTimeoutMs(): number {
+  const configured = Number(process.env.IOT_EVENT_REQUEST_TIMEOUT_MS);
+  if (!Number.isFinite(configured) || configured <= 0) {
+    return DEFAULT_EVENT_REQUEST_TIMEOUT_MS;
+  }
+  return Math.min(configured, MAX_EVENT_REQUEST_TIMEOUT_MS);
 }

@@ -36,7 +36,15 @@ interface PayosPaymentLinkResponse {
   data?: {
     checkoutUrl?: string;
     paymentLinkId?: string;
+    status?: string;
+    amount?: number;
   };
+}
+
+export interface PayosPaymentLinkStatus {
+  status: string;
+  amount?: number;
+  paymentLinkId?: string;
 }
 
 const PAYOS_PAYMENT_REQUEST_URL =
@@ -189,6 +197,41 @@ export class PayosClient {
     }
   }
 
+  async getPaymentLinkStatus(
+    orderCode: number,
+  ): Promise<PayosPaymentLinkStatus> {
+    if (!Number.isSafeInteger(orderCode) || orderCode <= 0) {
+      throw new Error("PayOS order code must be a positive safe integer");
+    }
+
+    if (this.config.mode === "mock") {
+      return {
+        status: "PENDING",
+        paymentLinkId: `mock_${orderCode}`,
+      };
+    }
+
+    try {
+      const response = await axios.get<PayosPaymentLinkResponse>(
+        `${PAYOS_PAYMENT_REQUEST_URL}/${orderCode}`,
+        {
+          headers: {
+            "x-client-id": this.config.clientId,
+            "x-api-key": this.config.apiKey,
+            "content-type": "application/json",
+          },
+          timeout: this.config.requestTimeoutMs,
+        },
+      );
+      return readPaymentLinkStatus(
+        response.data,
+        "PayOS payment link status lookup failed",
+      );
+    } catch (error: unknown) {
+      throw classifyPaymentLinkError(error, "lookup");
+    }
+  }
+
   async cancelPaymentLink(orderCode: number): Promise<void> {
     if (!Number.isSafeInteger(orderCode) || orderCode <= 0) {
       throw new Error("PayOS order code must be a positive safe integer");
@@ -275,6 +318,41 @@ function readPaymentLink(
   }
 
   return response.data;
+}
+
+function readPaymentLinkStatus(
+  response: unknown,
+  errorMessage: string,
+): PayosPaymentLinkStatus {
+  if (
+    typeof response !== "object" ||
+    response === null ||
+    !("code" in response) ||
+    response.code !== "00" ||
+    !("data" in response) ||
+    typeof response.data !== "object" ||
+    response.data === null ||
+    !("status" in response.data) ||
+    typeof response.data.status !== "string" ||
+    !response.data.status
+  ) {
+    throw new PayosPaymentLinkDefinitiveError(errorMessage);
+  }
+
+  const data = response.data as {
+    status: string;
+    amount?: unknown;
+    paymentLinkId?: unknown;
+  };
+  return {
+    status: data.status,
+    ...(typeof data.amount === "number" && Number.isFinite(data.amount)
+      ? { amount: data.amount }
+      : {}),
+    ...(typeof data.paymentLinkId === "string" && data.paymentLinkId
+      ? { paymentLinkId: data.paymentLinkId }
+      : {}),
+  };
 }
 
 function isPaymentLinkResponse(

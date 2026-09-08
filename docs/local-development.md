@@ -53,13 +53,15 @@ PAYOS_CHECKSUM_KEY=local-checksum-key
 MOCK_IOT_FAILURE_MODE=none
 PAYMENT_RESERVATION_TTL_MINUTES=15
 PAYMENT_REAPER_INTERVAL_MS=60000
+IOT_EVENT_JOURNAL_PATH=./data/iot-event-journal.json
+IOT_EVENT_REQUEST_TIMEOUT_MS=3000
 ```
 
 The mock IoT service accepts `MOCK_IOT_FAILURE_MODE=timeout`, `offline`, or `command_failed` to exercise command failure paths. `MOCK_IOT_START_DELAY_MS` and `MOCK_IOT_HEARTBEAT_MS` control the mock timing. Change an environment value in `docker-compose.yml`, then recreate the affected service.
 
-`COMMAND_ACCEPTED`, `RUNNING`, `STOPPED`, `COMMAND_FAILED`, and `DEVICE_OFFLINE` callbacks retain their original event ID and payload, retry after 100 ms, 500 ms, then a capped 1 second interval until the API acknowledges them, and preserve delivery order within a session. The mock clears retry timers on shutdown. Heartbeats remain best effort.
+`COMMAND_ACCEPTED`, `RUNNING`, `STOPPED`, `COMMAND_FAILED`, and `DEVICE_OFFLINE` callbacks are appended to the local JSON journal before delivery. The journal preserves event ID, payload, per-session sequence, retry count, and delivery state; undelivered events replay after an IoT restart. `IOT_EVENT_JOURNAL_PATH` defaults to `./data/iot-event-journal.json`. Compose mounts that path on the `charge-station-iot-events` named volume. Callback requests use `IOT_EVENT_REQUEST_TIMEOUT_MS` (3 seconds by default), retry after 100 ms, 500 ms, then a capped 1 second interval, and clear retry timers on shutdown. Heartbeats remain best effort.
 
-`PAYMENT_RESERVATION_TTL_MINUTES` controls how long a newly created pending payment reserves its connector. The API starts a non-blocking reaper after its listener is ready; it expires overdue pending reservations, releases their connector, and attempts to cancel the provider link. `PAYMENT_REAPER_INTERVAL_MS` controls its scan interval.
+`PAYMENT_RESERVATION_TTL_MINUTES` controls how long a newly created pending payment reserves its connector. The API starts a non-blocking reaper after its listener is ready. It claims overdue reservations, persists cancellation attempts, and only releases the connector after cancellation succeeds or PayOS definitively reports cancellation or expiry. Failed cancellation attempts remain reserved and retry with bounded backoff. `PAYMENT_REAPER_INTERVAL_MS` controls its scan interval.
 
 ## Signed Mock Webhook
 

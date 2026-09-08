@@ -335,7 +335,7 @@ describe("PaymentsService webhook processing", () => {
 
     expect(savedPayment?.status).toBe(PaymentTransactionStatus.EXPIRED);
     expect(savedPayment?.checkoutUrl).toBeNull();
-    expect(payosClient.cancelPaymentLink).toHaveBeenCalledWith(100001);
+    expect(payosClient.cancelPaymentLink).not.toHaveBeenCalled();
   });
 
   it("calls PayOS only after connector, order, and payment reservation commits", async () => {

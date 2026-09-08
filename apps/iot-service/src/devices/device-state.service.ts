@@ -1,19 +1,11 @@
 import { Injectable, type OnModuleDestroy } from "@nestjs/common";
 import type {
-  DeviceEvent,
   StartChargingCommand,
 } from "@charge-station/contracts";
 
 export type DeviceRuntimeStatus = "STARTING" | "RUNNING" | "STOPPED";
 export type RelayState = "ON" | "OFF";
 export type CommandResponseStatus = "ACCEPTED" | "REJECTED" | "STOPPED";
-
-export interface PendingCriticalDelivery {
-  event: DeviceEvent;
-  retryCount: number;
-  retryTimer?: ReturnType<typeof setTimeout>;
-  retryResolver?: () => void;
-}
 
 export interface DeviceRuntimeState {
   command: StartChargingCommand;
@@ -25,7 +17,6 @@ export interface DeviceRuntimeState {
   heartbeatTimer?: ReturnType<typeof setInterval>;
   stopTimer?: ReturnType<typeof setTimeout>;
   stoppedEventSent: boolean;
-  criticalDeliveries: Map<string, PendingCriticalDelivery>;
 }
 
 export interface CommandResponse {
@@ -69,7 +60,6 @@ export class DeviceStateService implements OnModuleDestroy {
       status: "STARTING",
       relayState: "OFF",
       stoppedEventSent: false,
-      criticalDeliveries: new Map(),
     };
     this.commands.set(command.commandId, state);
     this.connectors.set(command.connectorCode, state);
@@ -78,69 +68,6 @@ export class DeviceStateService implements OnModuleDestroy {
 
   saveStopResponse(commandId: string, response: CommandResponse): void {
     this.stopResponses.set(commandId, response);
-  }
-
-  createCriticalDelivery(
-    state: DeviceRuntimeState,
-    event: DeviceEvent,
-  ): PendingCriticalDelivery {
-    const existing = state.criticalDeliveries.get(event.eventId);
-    if (existing) {
-      return existing;
-    }
-
-    const delivery: PendingCriticalDelivery = {
-      event,
-      retryCount: 0,
-    };
-    state.criticalDeliveries.set(event.eventId, delivery);
-    return delivery;
-  }
-
-  getCriticalDelivery(
-    state: DeviceRuntimeState,
-    eventId: string,
-  ): PendingCriticalDelivery | undefined {
-    return state.criticalDeliveries.get(eventId);
-  }
-
-  acknowledgeCriticalDelivery(
-    state: DeviceRuntimeState,
-    eventId: string,
-  ): void {
-    const delivery = state.criticalDeliveries.get(eventId);
-    if (!delivery) {
-      return;
-    }
-
-    this.cancelCriticalRetry(delivery);
-    state.criticalDeliveries.delete(eventId);
-  }
-
-  waitForCriticalRetry(
-    delivery: PendingCriticalDelivery,
-    delayMs: number,
-  ): Promise<void> {
-    delivery.retryCount += 1;
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        if (delivery.retryTimer === timer) {
-          delivery.retryTimer = undefined;
-          delivery.retryResolver = undefined;
-        }
-        resolve();
-      }, delayMs);
-      delivery.retryTimer = timer;
-      delivery.retryResolver = () => {
-        if (delivery.retryTimer === timer) {
-          clearTimeout(timer);
-          delivery.retryTimer = undefined;
-        }
-        delivery.retryResolver = undefined;
-        resolve();
-      };
-      (timer as unknown as { unref?: () => void }).unref?.();
-    });
   }
 
   clearTimers(state: DeviceRuntimeState): void {
@@ -170,16 +97,9 @@ export class DeviceStateService implements OnModuleDestroy {
   onModuleDestroy(): void {
     for (const state of this.commands.values()) {
       this.clearTimers(state);
-      for (const delivery of state.criticalDeliveries.values()) {
-        this.cancelCriticalRetry(delivery);
-      }
-      state.criticalDeliveries.clear();
     }
     this.connectors.clear();
     this.stopResponses.clear();
   }
 
-  private cancelCriticalRetry(delivery: PendingCriticalDelivery): void {
-    delivery.retryResolver?.();
-  }
 }

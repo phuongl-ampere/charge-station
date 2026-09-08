@@ -75,6 +75,10 @@ services:
       MOCK_IOT_START_DELAY_MS: 250
       MOCK_IOT_HEARTBEAT_MS: 1000
       MOCK_IOT_FAILURE_MODE: none
+      IOT_EVENT_JOURNAL_PATH: /var/lib/charge-station/iot-event-journal.json
+      IOT_EVENT_REQUEST_TIMEOUT_MS: 3000
+    volumes:
+      - charge-station-iot-events:/var/lib/charge-station
     healthcheck:
       test:
         [
@@ -126,3 +130,4 @@ services:
 
 volumes:
   charge-station-postgres:
+  charge-station-iot-events:

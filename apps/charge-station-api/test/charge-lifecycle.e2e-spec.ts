@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type {
   DeviceEvent,
@@ -85,6 +88,7 @@ describe("mock payment-to-charging lifecycle", () => {
   let initialDeliveryEvents: Map<"COMMAND_ACCEPTED" | "RUNNING", DeviceEvent[]>;
   let stoppedDeliveryEventIds: string[];
   let apiBaseUrl: string;
+  let journalDirectory: string;
   const environment = new Map<string, string | undefined>();
   const testEnvironment = {
     CHARGE_STATION_API_URL: "",
@@ -99,9 +103,17 @@ describe("mock payment-to-charging lifecycle", () => {
     PAYOS_CLIENT_ID: "test-client-id",
     PAYOS_MODE: "mock",
     SERVICE_TOKEN: "charge-lifecycle-service-token",
+    IOT_EVENT_JOURNAL_PATH: "",
   };
 
   beforeAll(async () => {
+    journalDirectory = await mkdtemp(
+      join(tmpdir(), "charge-station-lifecycle-journal-"),
+    );
+    testEnvironment.IOT_EVENT_JOURNAL_PATH = join(
+      journalDirectory,
+      "events.json",
+    );
     for (const [name, value] of Object.entries(testEnvironment)) {
       environment.set(name, process.env[name]);
       process.env[name] = value;
@@ -234,6 +246,7 @@ describe("mock payment-to-charging lifecycle", () => {
     await iot?.close();
     await api?.close();
     await dataSource?.destroy();
+    await rm(journalDirectory, { recursive: true, force: true });
     for (const [name, value] of environment) {
       if (value === undefined) {
         delete process.env[name];

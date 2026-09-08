@@ -17,6 +17,7 @@ const event: DeviceEvent = {
 describe("ChargeStationEventClient", () => {
   const originalApiUrl = process.env.CHARGE_STATION_API_URL;
   const originalServiceToken = process.env.SERVICE_TOKEN;
+  const originalRequestTimeout = process.env.IOT_EVENT_REQUEST_TIMEOUT_MS;
   let fetchMock: ReturnType<typeof vi.fn>;
   let client: ChargeStationEventClient;
 
@@ -37,6 +38,11 @@ describe("ChargeStationEventClient", () => {
       delete process.env.SERVICE_TOKEN;
     } else {
       process.env.SERVICE_TOKEN = originalServiceToken;
+    }
+    if (originalRequestTimeout === undefined) {
+      delete process.env.IOT_EVENT_REQUEST_TIMEOUT_MS;
+    } else {
+      process.env.IOT_EVENT_REQUEST_TIMEOUT_MS = originalRequestTimeout;
     }
     vi.unstubAllGlobals();
   });
@@ -80,5 +86,20 @@ describe("ChargeStationEventClient", () => {
     );
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("supplies a bounded abort signal for callback delivery", async () => {
+    process.env.CHARGE_STATION_API_URL = "http://localhost:4000";
+    process.env.IOT_EVENT_REQUEST_TIMEOUT_MS = "25";
+    client = new ChargeStationEventClient();
+
+    await expect(client.post(event)).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:4000/internal/device-events",
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    );
   });
 });

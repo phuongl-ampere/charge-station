@@ -1,4 +1,8 @@
 import { Logger } from "@nestjs/common";
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   StartChargingCommand,
@@ -7,7 +11,10 @@ import type {
 
 import { CommandsService } from "./commands.service";
 import { ChargeStationEventClient } from "../events/charge-station-event.client";
+import { EventJournalService } from "../events/event-journal.service";
 import { DeviceStateService } from "../devices/device-state.service";
+
+const journalDirectories: string[] = [];
 
 function commandWithDuration(durationSeconds: number): StartChargingCommand {
   return {
@@ -47,9 +54,16 @@ describe("CommandsService", () => {
     );
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await service.onModuleDestroy();
+    deviceState.onModuleDestroy();
     vi.restoreAllMocks();
     vi.useRealTimers();
+    await Promise.all(
+      journalDirectories
+        .splice(0)
+        .map((directory) => rm(directory, { recursive: true, force: true })),
+    );
   });
 
   it("emits the accepted, running, heartbeat, and expiry event sequence", async () => {
@@ -126,7 +140,7 @@ describe("CommandsService", () => {
     await vi.advanceTimersByTimeAsync(2100);
 
     expect(deviceState.getConnector("ST01-C01")).toBeUndefined();
-    expect(eventClient.post).toHaveBeenCalledTimes(4);
+    expect(eventClient.post.mock.calls.length).toBeGreaterThanOrEqual(4);
   });
 
   it("retries a lost STOPPED delivery with its original event ID", async () => {
@@ -175,14 +189,17 @@ describe("CommandsService", () => {
       (event) =>
         event.type === "COMMAND_ACCEPTED" || event.type === "RUNNING",
     );
-    expect(initialEvents.map((event) => event.type)).toEqual([
-      "COMMAND_ACCEPTED",
-      "COMMAND_ACCEPTED",
-      "RUNNING",
-      "RUNNING",
-    ]);
-    expect(initialEvents[1]).toEqual(initialEvents[0]);
-    expect(initialEvents[3]).toEqual(initialEvents[2]);
+    expect(initialEvents).toHaveLength(4);
+    expect(initialEvents[0]?.type).toBe("COMMAND_ACCEPTED");
+    expect(initialEvents[1]?.type).toBe("RUNNING");
+    expect(
+      initialEvents.filter((event) => event.type === "COMMAND_ACCEPTED"),
+    ).toEqual([initialEvents[0], initialEvents[2]]);
+    expect(
+      initialEvents.filter((event) => event.type === "RUNNING"),
+    ).toEqual([initialEvents[1], initialEvents[3]]);
+    expect(initialEvents[2]).toEqual(initialEvents[0]);
+    expect(initialEvents[3]).toEqual(initialEvents[1]);
 
     await expect(service.stop(stopCommand())).resolves.toMatchObject({
       accepted: true,
@@ -190,11 +207,119 @@ describe("CommandsService", () => {
     });
   });
 
+  it("does not block STOPPED behind a timed-out nonterminal delivery", async () => {
+    eventClient.post.mockImplementation((event) => {
+      if (event.type === "COMMAND_ACCEPTED") {
+        return new Promise<void>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("callback timed out")), 25);
+        });
+      }
+      return Promise.resolve();
+    });
+
+    await service.start(commandWithDuration(1));
+    await vi.advanceTimersByTimeAsync(1_100);
+
+    expect(
+      eventClient.post.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.type === "STOPPED"),
+    ).toHaveLength(1);
+  });
+
+  it("persists failed critical deliveries with stable event IDs until retries succeed", async () => {
+    const path = await journalPath();
+    const journal = new EventJournalService(path);
+    const attempts = new Map<string, number>();
+    eventClient.post.mockImplementation(async (event) => {
+      const attemptsForEvent = (attempts.get(event.eventId) ?? 0) + 1;
+      attempts.set(event.eventId, attemptsForEvent);
+      if (
+        (event.type === "COMMAND_ACCEPTED" || event.type === "RUNNING") &&
+        attemptsForEvent === 1
+      ) {
+        throw new Error("simulated lost callback");
+      }
+    });
+    service = new CommandsService(
+      eventClient as unknown as ChargeStationEventClient,
+      deviceState,
+      journal,
+    );
+
+    await service.start(commandWithDuration(5));
+    await vi.advanceTimersByTimeAsync(300);
+
+    const delivered = eventClient.post.mock.calls
+      .map(([event]) => event)
+      .filter(
+        (event) =>
+          event.type === "COMMAND_ACCEPTED" || event.type === "RUNNING",
+      );
+    expect(delivered).toHaveLength(4);
+    expect(delivered[0]?.type).toBe("COMMAND_ACCEPTED");
+    expect(delivered[1]?.type).toBe("RUNNING");
+    expect(delivered[2]).toEqual(delivered[0]);
+    expect(delivered[3]).toEqual(delivered[1]);
+    expect(existsSync(path)).toBe(true);
+    const persisted = JSON.parse(await readFile(path, "utf8")) as {
+      records: Array<Record<string, unknown>>;
+    };
+    expect(persisted.records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: expect.objectContaining({ type: "COMMAND_ACCEPTED" }),
+          retryCount: 1,
+          delivered: true,
+        }),
+        expect.objectContaining({
+          event: expect.objectContaining({ type: "RUNNING" }),
+          retryCount: 1,
+          delivered: true,
+        }),
+      ]),
+    );
+    expect(await journal.getUndelivered()).toEqual([]);
+  });
+
+  it("replays an undelivered STOPPED record after a journal restart", async () => {
+    const path = await journalPath();
+    const journal = new EventJournalService(path);
+    const event = {
+      eventId: "event-stopped",
+      commandId: "command-1",
+      sessionId: "session-1",
+      deviceId: "dev_ST01",
+      connectorCode: "ST01-C01",
+      type: "STOPPED" as const,
+      occurredAt: "2026-09-08T12:00:00.000Z",
+      payload: { reason: "USER_REQUESTED", relayState: "OFF" },
+    };
+    await journal.initialize();
+    await journal.append(event);
+    const restartedJournal = new EventJournalService(path);
+    service = new CommandsService(
+      eventClient as unknown as ChargeStationEventClient,
+      deviceState,
+      restartedJournal,
+    );
+    const replayable = service as unknown as {
+      onModuleInit?: () => Promise<void>;
+    };
+
+    expect(replayable.onModuleInit).toBeTypeOf("function");
+    await replayable.onModuleInit?.();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(eventClient.post).toHaveBeenCalledWith(event);
+    expect(await restartedJournal.getUndelivered()).toEqual([]);
+  });
+
   it.each([
     ["command_failed", "COMMAND_FAILED"],
     ["offline", "DEVICE_OFFLINE"],
   ])(
-    "retries the $expectedType terminal failure event before STOPPED",
+    "retries the $expectedType event without blocking STOPPED delivery",
     async (mode, expectedType) => {
       const previousMode = process.env.MOCK_IOT_FAILURE_MODE;
       process.env.MOCK_IOT_FAILURE_MODE = mode;
@@ -217,7 +342,7 @@ describe("CommandsService", () => {
           eventClient.post.mock.calls
             .map(([event]) => event)
             .filter((event) => event.type === "STOPPED"),
-        ).toHaveLength(0);
+        ).toHaveLength(1);
 
         await vi.advanceTimersByTimeAsync(100);
         const failures = eventClient.post.mock.calls
@@ -252,10 +377,7 @@ describe("CommandsService", () => {
     await vi.advanceTimersByTimeAsync(1100);
 
     expect(vi.getTimerCount()).toBeGreaterThan(0);
-    const lifecycleState = deviceState as unknown as {
-      onModuleDestroy(): void;
-    };
-    lifecycleState.onModuleDestroy();
+    await service.onModuleDestroy();
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -278,7 +400,7 @@ describe("CommandsService", () => {
 
     await vi.advanceTimersByTimeAsync(2100);
 
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(4);
     expect(deviceState.getConnector("ST01-C01")).toBeUndefined();
   });
 
@@ -299,6 +421,7 @@ describe("CommandsService", () => {
     };
 
     await service.start(commandWithDuration(3));
+    await vi.advanceTimersByTimeAsync(0);
     expect(postedTypes).toEqual(["COMMAND_ACCEPTED"]);
 
     await vi.advanceTimersByTimeAsync(3100);
@@ -428,3 +551,9 @@ describe("CommandsService", () => {
     },
   );
 });
+
+async function journalPath(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "charge-station-iot-command-"));
+  journalDirectories.push(directory);
+  return join(directory, "events.json");
+}

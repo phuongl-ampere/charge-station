@@ -91,19 +91,34 @@ describe("device command active index migrations with local PostgreSQL", () => {
       }
 
       const { session } = await createFixture(dataSource);
-      const commandRepository = dataSource.getRepository(DeviceCommand);
-      const accepted = await commandRepository.save(
-        createCommand(session, DeviceCommandStatus.ACCEPTED),
-      );
-      const pending = await commandRepository.save(
-        createCommand(session, DeviceCommandStatus.PENDING),
-      );
-      const historical = await commandRepository.save(
-        createCommand(session, DeviceCommandStatus.FAILED),
-      );
+      const accepted = createCommand(session, DeviceCommandStatus.ACCEPTED);
+      const pending = createCommand(session, DeviceCommandStatus.PENDING);
+      const historical = createCommand(session, DeviceCommandStatus.FAILED);
+      for (const command of [accepted, pending, historical]) {
+        await dataSource.query(
+          [
+            "INSERT INTO device_commands (",
+            "id, command_id, session_id, command_type, payload, retry_count,",
+            "next_attempt_at, status, acknowledged_at",
+            ") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+          ].join(" "),
+          [
+            command.id,
+            command.commandId,
+            command.session.id,
+            command.commandType,
+            command.payload,
+            command.retryCount,
+            command.nextAttemptAt,
+            command.status,
+            command.acknowledgedAt,
+          ],
+        );
+      }
 
       await dataSource.runMigrations();
 
+      const commandRepository = dataSource.getRepository(DeviceCommand);
       const commands = await commandRepository.find({
         where: { session: { id: session.id } },
         order: { commandId: "ASC" },

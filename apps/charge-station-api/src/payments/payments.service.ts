@@ -21,6 +21,7 @@ import {
   DeviceCommandStatus,
   Order,
   OrderStatus,
+  PaymentCancellationStatus,
   PaymentTransaction,
   PaymentTransactionStatus,
 } from "../database/data-source.js";
@@ -30,6 +31,7 @@ import { ChargeGateway } from "../realtime/charge.gateway.js";
 import {
   PayosClient,
   PayosPaymentLinkDefinitiveError,
+  type PayosPaymentLinkStatus,
 } from "./payos.client.js";
 import type { CreateOrderDto } from "./dto/create-order.dto.js";
 import { parsePayosWebhook } from "./payos-webhook.js";
@@ -41,6 +43,23 @@ interface PaymentLinkReservation {
   amount: number;
   currency: string;
   description: string;
+}
+
+interface CancellationClaim {
+  paymentId: string;
+  orderId: string;
+  orderCode: number;
+  amount: number;
+  token: string;
+}
+
+interface PaymentTransition {
+  orderId: string;
+  orderCode: number;
+  orderStatus: OrderStatus;
+  sessionId?: string;
+  sessionStatus?: ChargingSessionStatus;
+  commandId?: string;
 }
 
 type PaymentLinkResponse =
@@ -64,6 +83,8 @@ type PaymentLinkPersistenceResult =
     };
 
 const DEFAULT_PAYMENT_RESERVATION_TTL_MINUTES = 15;
+const CANCELLATION_CLAIM_LEASE_MS = 30_000;
+const CANCELLATION_RETRY_DELAYS_MS = [1_000, 5_000, 30_000, 60_000] as const;
 
 @Injectable()
 export class PaymentsService {
@@ -117,19 +138,13 @@ export class PaymentsService {
     }
     if (persistence && !persistence.persisted) {
       if (persistence.reservationExpired) {
-        const expired = await this.expireReservation(
+        const transition = await this.expireReservation(
           reservation.paymentId,
           new Date(),
         );
-        if (expired) {
-          await this.cancelExpiredPaymentLink(expired.orderCode);
-          this.gateway?.publishOrder(expired.orderId, "payment.updated", {
-            orderId: expired.orderId,
-            status: OrderStatus.EXPIRED,
-          });
+        if (transition) {
+          this.publishPaymentTransition(transition);
         }
-      } else if (persistence.paymentStatus === PaymentTransactionStatus.EXPIRED) {
-        await this.cancelExpiredPaymentLink(reservation.orderCode);
       }
       throw new BadRequestException("Payment reservation is no longer pending");
     }
@@ -180,23 +195,19 @@ export class PaymentsService {
           expiresAt: LessThanOrEqual(now),
         },
       });
-    let expiredCount = 0;
+    let transitionedCount = 0;
 
     for (const payment of duePayments) {
-      const expired = await this.expireReservation(payment.id, now);
-      if (!expired) {
+      const transition = await this.expireReservation(payment.id, now);
+      if (!transition) {
         continue;
       }
 
-      expiredCount += 1;
-      await this.cancelExpiredPaymentLink(expired.orderCode);
-      this.gateway?.publishOrder(expired.orderId, "payment.updated", {
-        orderId: expired.orderId,
-        status: OrderStatus.EXPIRED,
-      });
+      transitionedCount += 1;
+      this.publishPaymentTransition(transition);
     }
 
-    return expiredCount;
+    return transitionedCount;
   }
 
   private async createPaymentLink(
@@ -354,6 +365,13 @@ export class PaymentsService {
           expiresAt: paymentReservationExpiry(new Date()),
           rawWebhookPayload: null,
           signatureValid: false,
+          cancellationStatus: PaymentCancellationStatus.NONE,
+          cancellationAttempts: 0,
+          cancellationLastAttemptAt: null,
+          cancellationNextAttemptAt: null,
+          cancellationLastError: null,
+          cancellationClaimToken: null,
+          cancellationClaimedAt: null,
         }),
       );
       const orderCode = parsePositiveOrderCode(order.payosOrderCode);
@@ -375,12 +393,129 @@ export class PaymentsService {
   private async expireReservation(
     paymentId: string,
     now: Date,
-  ): Promise<{ orderId: string; orderCode: number } | null> {
+  ): Promise<PaymentTransition | null> {
+    const claim = await this.claimExpiredReservation(paymentId, now);
+    if (!claim) {
+      return null;
+    }
+
+    try {
+      await this.payosClient.cancelPaymentLink(claim.orderCode);
+      return this.finalizeExpiredReservation(
+        claim,
+        PaymentCancellationStatus.CANCELLED,
+      );
+    } catch (cancellationError: unknown) {
+      return this.reconcileCancellationFailure(claim, now, cancellationError);
+    }
+  }
+
+  private async claimExpiredReservation(
+    paymentId: string,
+    now: Date,
+  ): Promise<CancellationClaim | null> {
+    return this.dataSource.transaction(async (manager) => {
+      const paymentRepository = manager.getRepository(PaymentTransaction);
+      const lockedPaymentId = await lockPaymentIdById(manager, paymentId);
+      const payment = lockedPaymentId
+        ? await paymentRepository.findOne({
+            where: { id: lockedPaymentId },
+            relations: { order: true },
+          })
+        : null;
+      if (
+        !payment ||
+        payment.status !== PaymentTransactionStatus.PENDING ||
+        payment.order.status !== OrderStatus.PENDING_PAYMENT ||
+        !payment.expiresAt ||
+        payment.expiresAt.valueOf() > now.valueOf() ||
+        (payment.cancellationClaimedAt &&
+          payment.cancellationClaimedAt.valueOf() >
+            now.valueOf() - CANCELLATION_CLAIM_LEASE_MS) ||
+        (payment.cancellationNextAttemptAt &&
+          payment.cancellationNextAttemptAt.valueOf() > now.valueOf()) ||
+        (payment.cancellationStatus !== undefined &&
+          payment.cancellationStatus !== PaymentCancellationStatus.NONE &&
+          payment.cancellationStatus !== PaymentCancellationStatus.PENDING)
+      ) {
+        return null;
+      }
+
+      const token = randomUUID();
+      payment.cancellationStatus = PaymentCancellationStatus.PENDING;
+      payment.cancellationAttempts = (payment.cancellationAttempts ?? 0) + 1;
+      payment.cancellationLastAttemptAt = now;
+      payment.cancellationNextAttemptAt = null;
+      payment.cancellationLastError = null;
+      payment.cancellationClaimToken = token;
+      payment.cancellationClaimedAt = now;
+      await paymentRepository.save(payment);
+      return {
+        paymentId: payment.id,
+        orderId: payment.order.id,
+        orderCode: parsePositiveOrderCode(payment.order.payosOrderCode),
+        amount: payment.order.amountVnd,
+        token,
+      };
+    });
+  }
+
+  private async reconcileCancellationFailure(
+    claim: CancellationClaim,
+    now: Date,
+    cancellationError: unknown,
+  ): Promise<PaymentTransition | null> {
+    try {
+      const providerStatus = await this.payosClient.getPaymentLinkStatus(
+        claim.orderCode,
+      );
+      const status = providerStatus.status.toUpperCase();
+      if (status === "CANCELLED" || status === "EXPIRED") {
+        return this.finalizeExpiredReservation(
+          claim,
+          PaymentCancellationStatus.PROVIDER_EXPIRED,
+        );
+      }
+      if (status === "PAID") {
+        if (
+          providerStatus.amount !== undefined &&
+          providerStatus.amount !== claim.amount
+        ) {
+          return this.finalizeExpiredReservation(
+            claim,
+            PaymentCancellationStatus.PAID_AFTER_EXPIRY,
+            "Provider reported a PAID amount that does not match the reservation",
+          );
+        }
+        return this.finalizeProviderPaidReservation(claim, providerStatus);
+      }
+      await this.scheduleCancellationRetry(claim, now, cancellationError);
+      return null;
+    } catch (statusError: unknown) {
+      await this.scheduleCancellationRetry(
+        claim,
+        now,
+        new Error(
+          "Cancellation failed: " +
+            errorMessage(cancellationError) +
+            "; status lookup failed: " +
+            errorMessage(statusError),
+        ),
+      );
+      return null;
+    }
+  }
+
+  private async finalizeExpiredReservation(
+    claim: CancellationClaim,
+    cancellationStatus: PaymentCancellationStatus,
+    cancellationError: string | null = null,
+  ): Promise<PaymentTransition | null> {
     return this.dataSource.transaction(async (manager) => {
       const paymentRepository = manager.getRepository(PaymentTransaction);
       const orderRepository = manager.getRepository(Order);
       const connectorRepository = manager.getRepository(Connector);
-      const lockedPaymentId = await lockPaymentIdById(manager, paymentId);
+      const lockedPaymentId = await lockPaymentIdById(manager, claim.paymentId);
       const payment = lockedPaymentId
         ? await paymentRepository.findOne({
             where: { id: lockedPaymentId },
@@ -390,9 +525,7 @@ export class PaymentsService {
       if (
         !payment ||
         payment.status !== PaymentTransactionStatus.PENDING ||
-        payment.order.status !== OrderStatus.PENDING_PAYMENT ||
-        !payment.expiresAt ||
-        payment.expiresAt.valueOf() > now.valueOf()
+        payment.cancellationClaimToken !== claim.token
       ) {
         return null;
       }
@@ -410,6 +543,11 @@ export class PaymentsService {
 
       payment.status = PaymentTransactionStatus.EXPIRED;
       payment.order.status = OrderStatus.EXPIRED;
+      payment.cancellationStatus = cancellationStatus;
+      payment.cancellationClaimToken = null;
+      payment.cancellationClaimedAt = null;
+      payment.cancellationNextAttemptAt = null;
+      payment.cancellationLastError = cancellationError;
       connector.status = ConnectorStatus.AVAILABLE;
       await orderRepository.save(payment.order);
       await paymentRepository.save(payment);
@@ -417,18 +555,148 @@ export class PaymentsService {
       return {
         orderId: payment.order.id,
         orderCode: parsePositiveOrderCode(payment.order.payosOrderCode),
+        orderStatus: payment.order.status,
       };
     });
   }
 
-  private async cancelExpiredPaymentLink(orderCode: number): Promise<void> {
-    try {
-      await this.payosClient.cancelPaymentLink(orderCode);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(
-        `Unable to cancel expired PayOS payment link ${orderCode}: ${message}`,
+  private async finalizeProviderPaidReservation(
+    claim: CancellationClaim,
+    providerStatus: PayosPaymentLinkStatus,
+  ): Promise<PaymentTransition | null> {
+    return this.dataSource.transaction(async (manager) => {
+      const paymentRepository = manager.getRepository(PaymentTransaction);
+      const orderRepository = manager.getRepository(Order);
+      const connectorRepository = manager.getRepository(Connector);
+      const sessionRepository = manager.getRepository(ChargingSession);
+      const commandRepository = manager.getRepository(DeviceCommand);
+      const lockedPaymentId = await lockPaymentIdById(manager, claim.paymentId);
+      const payment = lockedPaymentId
+        ? await paymentRepository.findOne({
+            where: { id: lockedPaymentId },
+            relations: { order: { connector: { station: true } } },
+          })
+        : null;
+      if (
+        !payment ||
+        payment.status !== PaymentTransactionStatus.PENDING ||
+        payment.cancellationClaimToken !== claim.token
+      ) {
+        return null;
+      }
+
+      const connectorId = await lockConnectorIdById(
+        manager,
+        payment.order.connector.id,
       );
+      const connector = connectorId
+        ? await connectorRepository.findOne({ where: { id: connectorId } })
+        : null;
+      if (!connector) {
+        throw new NotFoundException("Connector not found");
+      }
+
+      payment.status = PaymentTransactionStatus.PAID;
+      payment.order.status = OrderStatus.PAID;
+      payment.paymentLinkId = providerStatus.paymentLinkId ?? payment.paymentLinkId;
+      payment.cancellationStatus = PaymentCancellationStatus.PROVIDER_PAID;
+      payment.cancellationClaimToken = null;
+      payment.cancellationClaimedAt = null;
+      payment.cancellationNextAttemptAt = null;
+      payment.cancellationLastError = null;
+      connector.status = ConnectorStatus.OCCUPIED;
+      await orderRepository.save(payment.order);
+      await paymentRepository.save(payment);
+      await connectorRepository.save(connector);
+
+      const session = sessionRepository.create({
+        id: randomUUID(),
+        order: payment.order,
+        connector,
+        status: ChargingSessionStatus.PENDING,
+        startedAt: null,
+        expectedEndAt: new Date(
+          Date.now() + payment.order.durationMinutes * 60_000,
+        ),
+        stoppedAt: null,
+      });
+      const savedSession = await sessionRepository.save(session);
+      const command = commandRepository.create({
+        id: randomUUID(),
+        commandId: randomUUID(),
+        session: savedSession,
+        commandType: "START_CHARGING",
+        payload: {
+          stationCode: payment.order.connector.station.code,
+          connectorCode: connector.code,
+          deviceId: payment.order.connector.station.deviceId,
+          sessionId: savedSession.id,
+          durationSeconds: payment.order.durationMinutes * 60,
+          expiresAt: savedSession.expectedEndAt!.toISOString(),
+          configVersion: 1,
+        },
+        retryCount: 0,
+        status: DeviceCommandStatus.PENDING,
+        acknowledgedAt: null,
+      });
+      await commandRepository.save(command);
+      return {
+        orderId: payment.order.id,
+        orderCode: parsePositiveOrderCode(payment.order.payosOrderCode),
+        orderStatus: payment.order.status,
+        sessionId: savedSession.id,
+        sessionStatus: savedSession.status,
+        commandId: command.commandId,
+      };
+    });
+  }
+
+  private async scheduleCancellationRetry(
+    claim: CancellationClaim,
+    now: Date,
+    error: unknown,
+  ): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const paymentRepository = manager.getRepository(PaymentTransaction);
+      const lockedPaymentId = await lockPaymentIdById(manager, claim.paymentId);
+      const payment = lockedPaymentId
+        ? await paymentRepository.findOneBy({ id: lockedPaymentId })
+        : null;
+      if (
+        !payment ||
+        payment.status !== PaymentTransactionStatus.PENDING ||
+        payment.cancellationClaimToken !== claim.token
+      ) {
+        return;
+      }
+
+      payment.cancellationStatus = PaymentCancellationStatus.PENDING;
+      payment.cancellationClaimToken = null;
+      payment.cancellationClaimedAt = null;
+      payment.cancellationNextAttemptAt = new Date(
+        now.valueOf() +
+          cancellationRetryDelay(payment.cancellationAttempts ?? 1),
+      );
+      payment.cancellationLastError = errorMessage(error).slice(0, 500);
+      await paymentRepository.save(payment);
+    });
+  }
+
+  private publishPaymentTransition(transition: PaymentTransition): void {
+    this.gateway?.publishOrder(transition.orderId, "payment.updated", {
+      orderId: transition.orderId,
+      status: transition.orderStatus,
+      ...(transition.sessionId ? { sessionId: transition.sessionId } : {}),
+    });
+    if (transition.sessionId && transition.sessionStatus) {
+      this.gateway?.publishSession(
+        transition.sessionId,
+        "session.updated",
+        transition.sessionStatus,
+      );
+    }
+    if (transition.commandId) {
+      this.dispatchStartCommand(transition.commandId);
     }
   }
 
@@ -554,6 +822,10 @@ export class PaymentsService {
           "PayOS payment amount does not match the order",
         );
       }
+      const reservationExpired =
+        payment.expiresAt !== undefined &&
+        payment.expiresAt !== null &&
+        payment.expiresAt.valueOf() <= Date.now();
       const connectorId = await lockConnectorIdById(
         manager,
         payment.order.connector.id,
@@ -572,6 +844,31 @@ export class PaymentsService {
           ? webhook.data.paymentLinkId
           : payment.paymentLinkId;
 
+      if (reservationExpired) {
+        payment.status = PaymentTransactionStatus.EXPIRED;
+        payment.order.status = OrderStatus.EXPIRED;
+        payment.cancellationStatus =
+          webhook.code === "00" && webhook.success === true
+            ? PaymentCancellationStatus.PAID_AFTER_EXPIRY
+            : PaymentCancellationStatus.PROVIDER_EXPIRED;
+        payment.cancellationClaimToken = null;
+        payment.cancellationClaimedAt = null;
+        payment.cancellationNextAttemptAt = null;
+        payment.cancellationLastError =
+          webhook.code === "00" && webhook.success === true
+            ? "Provider reported PAID after reservation expiry"
+            : null;
+        connector.status = ConnectorStatus.AVAILABLE;
+        await orderRepository.save(payment.order);
+        await paymentRepository.save(payment);
+        await connectorRepository.save(connector);
+        return {
+          success: true,
+          orderId: payment.order.id,
+          orderStatus: payment.order.status,
+        };
+      }
+
       if (webhook.code !== "00" || webhook.success !== true) {
         const expired = webhook.data.status === "EXPIRED";
         payment.status = expired
@@ -580,6 +877,13 @@ export class PaymentsService {
         payment.order.status = expired
           ? OrderStatus.EXPIRED
           : OrderStatus.PAYMENT_FAILED;
+        if (expired) {
+          payment.cancellationStatus = PaymentCancellationStatus.PROVIDER_EXPIRED;
+          payment.cancellationClaimToken = null;
+          payment.cancellationClaimedAt = null;
+          payment.cancellationNextAttemptAt = null;
+          payment.cancellationLastError = null;
+        }
         connector.status = ConnectorStatus.AVAILABLE;
         await orderRepository.save(payment.order);
         await paymentRepository.save(payment);
@@ -593,6 +897,11 @@ export class PaymentsService {
 
       payment.status = PaymentTransactionStatus.PAID;
       payment.order.status = OrderStatus.PAID;
+      payment.cancellationStatus = PaymentCancellationStatus.NONE;
+      payment.cancellationClaimToken = null;
+      payment.cancellationClaimedAt = null;
+      payment.cancellationNextAttemptAt = null;
+      payment.cancellationLastError = null;
       connector.status = ConnectorStatus.OCCUPIED;
       await orderRepository.save(payment.order);
       await paymentRepository.save(payment);
@@ -862,6 +1171,19 @@ function paymentReservationTtlMinutes(): number {
   return Number.isFinite(configuredMinutes) && configuredMinutes > 0
     ? configuredMinutes
     : DEFAULT_PAYMENT_RESERVATION_TTL_MINUTES;
+}
+
+function cancellationRetryDelay(attempts: number): number {
+  return CANCELLATION_RETRY_DELAYS_MS[
+    Math.min(
+      Math.max(0, attempts - 1),
+      CANCELLATION_RETRY_DELAYS_MS.length - 1,
+    )
+  ];
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function parsePositiveAmount(value: unknown): number {

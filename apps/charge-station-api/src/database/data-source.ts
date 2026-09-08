@@ -18,6 +18,8 @@ import { AddDeviceCommandRetryAndSessionState } from './migrations/002-device-co
 import { AddDeviceCommandSessionTypeUnique } from './migrations/003-device-command-session-type-unique.js';
 import { AddActiveDeviceCommandSessionTypeUnique } from './migrations/004-device-command-active-index.js';
 import { AddPaymentReservationExpiry } from './migrations/005-payment-reservation-expiry.js';
+import { AddPaymentCancellationState } from './migrations/006-payment-cancellation-state.js';
+import { AddDeviceCommandDispatchClaim } from './migrations/007-device-command-dispatch-claim.js';
 
 export enum UserRole {
   CUSTOMER = 'CUSTOMER',
@@ -46,6 +48,15 @@ export enum PaymentTransactionStatus {
   EXPIRED = 'EXPIRED',
 }
 
+export enum PaymentCancellationStatus {
+  NONE = 'NONE',
+  PENDING = 'PENDING',
+  CANCELLED = 'CANCELLED',
+  PROVIDER_EXPIRED = 'PROVIDER_EXPIRED',
+  PROVIDER_PAID = 'PROVIDER_PAID',
+  PAID_AFTER_EXPIRY = 'PAID_AFTER_EXPIRY',
+}
+
 export enum ChargingSessionStatus {
   PENDING = 'PENDING',
   STARTING = 'STARTING',
@@ -59,6 +70,7 @@ export enum ChargingSessionStatus {
 
 export enum DeviceCommandStatus {
   PENDING = 'PENDING',
+  DISPATCHING = 'DISPATCHING',
   SENT = 'SENT',
   ACCEPTED = 'ACCEPTED',
   COMPLETED = 'COMPLETED',
@@ -227,6 +239,43 @@ export class PaymentTransaction {
   @Column({ name: 'signature_valid', type: 'boolean', default: false })
   signatureValid!: boolean;
 
+  @Column({
+    name: 'cancellation_status',
+    type: 'varchar',
+    default: PaymentCancellationStatus.NONE,
+  })
+  cancellationStatus!: PaymentCancellationStatus;
+
+  @Column({ name: 'cancellation_attempts', type: 'integer', default: 0 })
+  cancellationAttempts!: number;
+
+  @Column({
+    name: 'cancellation_last_attempt_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  cancellationLastAttemptAt!: Date | null;
+
+  @Column({
+    name: 'cancellation_next_attempt_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  cancellationNextAttemptAt!: Date | null;
+
+  @Column({ name: 'cancellation_last_error', type: 'varchar', nullable: true })
+  cancellationLastError!: string | null;
+
+  @Column({ name: 'cancellation_claim_token', type: 'varchar', nullable: true })
+  cancellationClaimToken!: string | null;
+
+  @Column({
+    name: 'cancellation_claimed_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  cancellationClaimedAt!: Date | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
@@ -282,7 +331,7 @@ export class ChargingSession {
 @Entity('device_commands')
 @Index('uq_device_commands_active_session_command_type', ['session', 'commandType'], {
   unique: true,
-  where: `"status" IN ('PENDING', 'SENT', 'ACCEPTED')`,
+  where: `"status" IN ('PENDING', 'DISPATCHING', 'SENT', 'ACCEPTED')`,
 })
 export class DeviceCommand {
   @PrimaryColumn('uuid')
@@ -312,6 +361,19 @@ export class DeviceCommand {
 
   @Column({ name: 'acknowledged_at', type: 'timestamptz', nullable: true })
   acknowledgedAt!: Date | null;
+
+  @Column({ name: 'dispatch_claim_token', type: 'varchar', nullable: true })
+  dispatchClaimToken!: string | null;
+
+  @Column({
+    name: 'dispatch_claimed_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  dispatchClaimedAt!: Date | null;
+
+  @Column({ name: 'dispatch_version', type: 'integer', default: 0 })
+  dispatchVersion!: number;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
@@ -376,6 +438,8 @@ export const migrations = [
   AddDeviceCommandSessionTypeUnique,
   AddActiveDeviceCommandSessionTypeUnique,
   AddPaymentReservationExpiry,
+  AddPaymentCancellationState,
+  AddDeviceCommandDispatchClaim,
 ];
 
 export const databaseOptions: DataSourceOptions = {

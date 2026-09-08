@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import {
   Inject,
   Injectable,
@@ -31,6 +33,13 @@ import {
 
 const RETRY_DELAYS_MS = [1_000, 5_000, 20_000] as const;
 const IOT_READINESS_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 5_000] as const;
+const DISPATCH_CLAIM_LEASE_MS = 30_000;
+
+interface DispatchClaim {
+  token: string;
+  version: number;
+  claimedAt: Date;
+}
 
 class DefinitiveStartCommandError extends Error {
   constructor() {
@@ -48,6 +57,10 @@ export class CommandDispatcherService
   private readinessRecoveryDispatched = false;
   private readinessRetryTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly commandsAwaitingIotReadiness = new Set<string>();
+  private readonly claimRecoveryTimers = new Map<
+    string,
+    { token: string; timer: ReturnType<typeof setTimeout> }
+  >();
 
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
@@ -66,6 +79,10 @@ export class CommandDispatcherService
       clearTimeout(this.readinessRetryTimer);
       this.readinessRetryTimer = undefined;
     }
+    for (const { timer } of this.claimRecoveryTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.claimRecoveryTimers.clear();
     this.commandsAwaitingIotReadiness.clear();
   }
 
@@ -99,88 +116,179 @@ export class CommandDispatcherService
 
   async dispatch(commandId: string): Promise<void> {
     const commandRepository = this.dataSource.getRepository(DeviceCommand);
-    const command = await commandRepository.findOne({
+    const scheduledCommand = await commandRepository.findOne({
       where: { commandId },
       relations: { session: { connector: { station: true }, order: true } },
     });
-    if (!command) {
+    if (!scheduledCommand) {
       throw new NotFoundException("Device command not found");
     }
-    if (command.status !== DeviceCommandStatus.PENDING) {
+    if (scheduledCommand.status === DeviceCommandStatus.DISPATCHING) {
+      if (
+        !(await this.recoverStaleClaim(commandRepository, scheduledCommand))
+      ) {
+        return;
+      }
+      await this.dispatch(commandId);
+      return;
+    }
+    if (scheduledCommand.status !== DeviceCommandStatus.PENDING) {
       return;
     }
 
-    let commandPayload: StartChargingCommand | StopChargingCommand;
     try {
-      commandPayload = toDeviceCommand(command);
+      await this.waitForScheduledAttempt(scheduledCommand);
     } catch (error: unknown) {
-      await this.markPreDispatchFailure(command, commandRepository, error);
+      const failureClaim = await this.claimPendingCommand(
+        commandRepository,
+        scheduledCommand,
+      );
+      if (failureClaim) {
+        const claimedCommand = await this.findClaimedCommand(
+          commandRepository,
+          commandId,
+          failureClaim.token,
+        );
+        if (claimedCommand) {
+          this.scheduleClaimRecovery(claimedCommand.commandId, failureClaim);
+          await this.markPreDispatchFailure(
+            claimedCommand,
+            commandRepository,
+            failureClaim,
+            error,
+          );
+          this.clearClaimRecovery(commandId, failureClaim.token);
+        }
+      }
       throw error;
     }
 
-    while (true) {
-      try {
-        await this.waitForScheduledAttempt(command);
-        if ("durationSeconds" in commandPayload) {
-          assertStartCommandExpiry(commandPayload.expiresAt);
-        }
-      } catch (error: unknown) {
-        await this.markPreDispatchFailure(command, commandRepository, error);
-        throw error;
-      }
-      try {
-        await this.send(commandPayload);
-        if (
-          await this.updatePendingCommand(commandRepository, command, {
-            status: DeviceCommandStatus.SENT,
-            nextAttemptAt: null,
-          })
-        ) {
-          command.status = DeviceCommandStatus.SENT;
-          command.nextAttemptAt = null;
-        }
+    let claim: DispatchClaim | null = null;
+    let claimedCommand: DeviceCommand | null = null;
+    let commandPayload: StartChargingCommand | StopChargingCommand | undefined;
+    try {
+      claim = await this.claimPendingCommand(
+        commandRepository,
+        scheduledCommand,
+      );
+      if (!claim) {
         return;
-      } catch (error: unknown) {
-        if (error instanceof IotTransportError) {
-          if (
-            !Number.isInteger(command.retryCount) ||
-            command.retryCount < 0 ||
-            command.retryCount >= RETRY_DELAYS_MS.length
-          ) {
-            await this.markRetryExhausted(command, commandRepository);
-            throw error;
-          }
-
-          const delayMs = RETRY_DELAYS_MS[command.retryCount];
-          const retryCount = command.retryCount + 1;
-          const nextAttemptAt = new Date(Date.now() + delayMs);
-          if (
-            !(
-              await this.updatePendingCommand(commandRepository, command, {
-                status: DeviceCommandStatus.PENDING,
-                retryCount,
-                nextAttemptAt,
-              })
-            )
-          ) {
-            return;
-          }
-          command.retryCount = retryCount;
-          command.nextAttemptAt = nextAttemptAt;
-          await this.wait(delayMs);
-          continue;
-        }
-
-        if (
-          error instanceof IotCommandRejectedError &&
-          command.commandType === "START_CHARGING"
-        ) {
-          await this.markDefinitiveStartFailure(command, commandRepository);
-        } else {
-          await this.markFailed(command, commandRepository);
-        }
-        throw error;
       }
+      claimedCommand = await this.findClaimedCommand(
+        commandRepository,
+        commandId,
+        claim.token,
+      );
+      if (!claimedCommand) {
+        return;
+      }
+      this.scheduleClaimRecovery(claimedCommand.commandId, claim);
+      commandPayload = toDeviceCommand(claimedCommand);
+    } catch (error: unknown) {
+      if (claim) {
+        const claimedCommand = await this.findClaimedCommand(
+          commandRepository,
+          commandId,
+          claim.token,
+        );
+        if (claimedCommand) {
+          await this.markPreDispatchFailure(
+            claimedCommand,
+            commandRepository,
+            claim,
+            error,
+          );
+        }
+        this.clearClaimRecovery(commandId, claim.token);
+      }
+      throw error;
+    }
+
+    if (!claim || !claimedCommand || !commandPayload) {
+      return;
+    }
+    await this.dispatchClaimedCommand(
+      claimedCommand,
+      commandRepository,
+      claim,
+      commandPayload,
+    );
+  }
+
+  private async dispatchClaimedCommand(
+    command: DeviceCommand,
+    commandRepository: Repository<DeviceCommand>,
+    claim: DispatchClaim,
+    commandPayload: StartChargingCommand | StopChargingCommand,
+  ): Promise<void> {
+    try {
+      if ("durationSeconds" in commandPayload) {
+        assertStartCommandExpiry(commandPayload.expiresAt);
+      }
+      await this.send(commandPayload);
+      if (
+        await this.updateClaimedCommand(commandRepository, command, claim, {
+          status: DeviceCommandStatus.SENT,
+          nextAttemptAt: null,
+        })
+      ) {
+        command.status = DeviceCommandStatus.SENT;
+        command.nextAttemptAt = null;
+        command.dispatchClaimToken = null;
+        command.dispatchClaimedAt = null;
+        command.dispatchVersion = claim.version + 1;
+      }
+      this.clearClaimRecovery(command.commandId, claim.token);
+      return;
+    } catch (error: unknown) {
+      if (error instanceof IotTransportError) {
+        if (
+          !Number.isInteger(command.retryCount) ||
+          command.retryCount < 0 ||
+          command.retryCount >= RETRY_DELAYS_MS.length
+        ) {
+          await this.markRetryExhausted(command, commandRepository, claim);
+          this.clearClaimRecovery(command.commandId, claim.token);
+          throw error;
+        }
+
+        const delayMs = RETRY_DELAYS_MS[command.retryCount];
+        const retryCount = command.retryCount + 1;
+        const nextAttemptAt = new Date(Date.now() + delayMs);
+        if (
+          !(
+            await this.updateClaimedCommand(commandRepository, command, claim, {
+              status: DeviceCommandStatus.PENDING,
+              retryCount,
+              nextAttemptAt,
+            })
+          )
+        ) {
+          this.clearClaimRecovery(command.commandId, claim.token);
+          return;
+        }
+        command.status = DeviceCommandStatus.PENDING;
+        command.retryCount = retryCount;
+        command.nextAttemptAt = nextAttemptAt;
+        command.dispatchClaimToken = null;
+        command.dispatchClaimedAt = null;
+        command.dispatchVersion = claim.version + 1;
+        this.clearClaimRecovery(command.commandId, claim.token);
+        await this.wait(delayMs);
+        await this.dispatch(command.commandId);
+        return;
+      }
+
+      if (
+        error instanceof IotCommandRejectedError &&
+        command.commandType === "START_CHARGING"
+      ) {
+        await this.markDefinitiveStartFailure(command, commandRepository, claim);
+      } else {
+        await this.markFailed(command, commandRepository, claim);
+      }
+      this.clearClaimRecovery(command.commandId, claim.token);
+      throw error;
     }
   }
 
@@ -214,24 +322,148 @@ export class CommandDispatcherService
     }
   }
 
+  private async claimPendingCommand(
+    commandRepository: Repository<DeviceCommand>,
+    command: DeviceCommand,
+  ): Promise<DispatchClaim | null> {
+    const token = randomUUID();
+    const claimedAt = new Date();
+    const baseVersion = normalizedDispatchVersion(command.dispatchVersion);
+    const result = await commandRepository.update(
+      {
+        commandId: command.commandId,
+        status: DeviceCommandStatus.PENDING,
+        dispatchVersion: baseVersion,
+      },
+      {
+        status: DeviceCommandStatus.DISPATCHING,
+        dispatchClaimToken: token,
+        dispatchClaimedAt: claimedAt,
+        dispatchVersion: incrementDispatchVersion(),
+      } as never,
+    );
+    return result.affected === 1
+      ? { token, version: baseVersion + 1, claimedAt }
+      : null;
+  }
+
+  private async findClaimedCommand(
+    commandRepository: Repository<DeviceCommand>,
+    commandId: string,
+    token: string,
+  ): Promise<DeviceCommand | null> {
+    return commandRepository.findOne({
+      where: {
+        commandId,
+        status: DeviceCommandStatus.DISPATCHING,
+        dispatchClaimToken: token,
+      },
+      relations: { session: { connector: { station: true }, order: true } },
+    });
+  }
+
+  private async recoverStaleClaim(
+    commandRepository: Repository<DeviceCommand>,
+    command: DeviceCommand,
+  ): Promise<boolean> {
+    const claimedAt = command.dispatchClaimedAt?.valueOf();
+    if (
+      claimedAt !== undefined &&
+      !Number.isNaN(claimedAt) &&
+      claimedAt > Date.now() - DISPATCH_CLAIM_LEASE_MS
+    ) {
+      return false;
+    }
+
+    const baseVersion = normalizedDispatchVersion(command.dispatchVersion);
+    const criteria: Record<string, unknown> = {
+      commandId: command.commandId,
+      status: DeviceCommandStatus.DISPATCHING,
+      dispatchVersion: baseVersion,
+    };
+    if (command.dispatchClaimToken) {
+      criteria.dispatchClaimToken = command.dispatchClaimToken;
+    }
+    const result = await commandRepository.update(
+      criteria,
+      {
+        status: DeviceCommandStatus.PENDING,
+        dispatchClaimToken: null,
+        dispatchClaimedAt: null,
+        dispatchVersion: incrementDispatchVersion(),
+      } as never,
+    );
+    if (result.affected === 1) {
+      this.clearClaimRecovery(
+        command.commandId,
+        command.dispatchClaimToken ?? undefined,
+      );
+      return true;
+    }
+    return false;
+  }
+
+  private scheduleClaimRecovery(
+    commandId: string,
+    claim: DispatchClaim,
+  ): void {
+    this.clearClaimRecovery(commandId);
+    const delayMs = Math.max(
+      0,
+      claim.claimedAt.valueOf() + DISPATCH_CLAIM_LEASE_MS - Date.now(),
+    );
+    const timer = setTimeout(() => {
+      const scheduled = this.claimRecoveryTimers.get(commandId);
+      if (!scheduled || scheduled.token !== claim.token) {
+        return;
+      }
+      this.claimRecoveryTimers.delete(commandId);
+      void this.dispatch(commandId).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          "Unable to recover stale IoT command claim " +
+            commandId +
+            ": " +
+            message,
+        );
+      });
+    }, delayMs);
+    this.claimRecoveryTimers.set(commandId, { token: claim.token, timer });
+    (timer as unknown as { unref?: () => void }).unref?.();
+  }
+
+  private clearClaimRecovery(commandId: string, token?: string): void {
+    const scheduled = this.claimRecoveryTimers.get(commandId);
+    if (!scheduled || (token && scheduled.token !== token)) {
+      return;
+    }
+    clearTimeout(scheduled.timer);
+    this.claimRecoveryTimers.delete(commandId);
+  }
+
   private async markFailed(
     command: DeviceCommand,
     commandRepository: Repository<DeviceCommand>,
+    claim: DispatchClaim,
   ): Promise<void> {
     if (
-      await this.updatePendingCommand(commandRepository, command, {
+      await this.updateClaimedCommand(commandRepository, command, claim, {
         status: DeviceCommandStatus.FAILED,
         nextAttemptAt: null,
       })
     ) {
       command.status = DeviceCommandStatus.FAILED;
       command.nextAttemptAt = null;
+      command.dispatchClaimToken = null;
+      command.dispatchClaimedAt = null;
+      command.dispatchVersion = claim.version + 1;
     }
   }
 
-  private async updatePendingCommand(
+  private async updateClaimedCommand(
     commandRepository: Repository<DeviceCommand>,
     command: DeviceCommand,
+    claim: DispatchClaim,
     values: {
       status: DeviceCommandStatus;
       nextAttemptAt: Date | null;
@@ -241,9 +473,16 @@ export class CommandDispatcherService
     const result = await commandRepository.update(
       {
         commandId: command.commandId,
-        status: DeviceCommandStatus.PENDING,
+        status: DeviceCommandStatus.DISPATCHING,
+        dispatchClaimToken: claim.token,
+        dispatchVersion: claim.version,
       },
-      values,
+      {
+        ...values,
+        dispatchClaimToken: null,
+        dispatchClaimedAt: null,
+        dispatchVersion: incrementDispatchVersion(),
+      } as never,
     );
     return result.affected === 1;
   }
@@ -251,25 +490,27 @@ export class CommandDispatcherService
   private async markPreDispatchFailure(
     command: DeviceCommand,
     commandRepository: Repository<DeviceCommand>,
+    claim: DispatchClaim,
     error: unknown,
   ): Promise<void> {
     if (
       command.commandType === "START_CHARGING" &&
       error instanceof DefinitiveStartCommandError
     ) {
-      await this.markDefinitiveStartFailure(command, commandRepository);
+      await this.markDefinitiveStartFailure(command, commandRepository, claim);
       return;
     }
 
-    await this.markFailed(command, commandRepository);
+    await this.markFailed(command, commandRepository, claim);
   }
 
   private async markRetryExhausted(
     command: DeviceCommand,
     commandRepository: Repository<DeviceCommand>,
+    claim: DispatchClaim,
   ): Promise<void> {
     if (command.commandType !== "START_CHARGING") {
-      await this.markFailed(command, commandRepository);
+      await this.markFailed(command, commandRepository, claim);
       return;
     }
 
@@ -281,29 +522,45 @@ export class CommandDispatcherService
         command.session.id,
       );
       if (!sessionId) {
-        await this.markFailed(command, transactionalCommandRepository);
+        await this.markFailed(
+          command,
+          transactionalCommandRepository,
+          claim,
+        );
         return null;
       }
 
       const sessionRepository = manager.getRepository(ChargingSession);
       const session = await sessionRepository.findOneBy({ id: sessionId });
       if (!session) {
-        await this.markFailed(command, transactionalCommandRepository);
+        await this.markFailed(
+          command,
+          transactionalCommandRepository,
+          claim,
+        );
         return null;
       }
 
       if (
         !(
-          await this.updatePendingCommand(transactionalCommandRepository, command, {
+          await this.updateClaimedCommand(
+            transactionalCommandRepository,
+            command,
+            claim,
+            {
             status: DeviceCommandStatus.FAILED,
             nextAttemptAt: null,
-          })
+            },
+          )
         )
       ) {
         return null;
       }
       command.status = DeviceCommandStatus.FAILED;
       command.nextAttemptAt = null;
+      command.dispatchClaimToken = null;
+      command.dispatchClaimedAt = null;
+      command.dispatchVersion = claim.version + 1;
       const shouldMarkStateUnknown =
         session.status === ChargingSessionStatus.PENDING ||
         session.status === ChargingSessionStatus.STARTING;
@@ -333,6 +590,7 @@ export class CommandDispatcherService
   private async markDefinitiveStartFailure(
     command: DeviceCommand,
     commandRepository: Repository<DeviceCommand>,
+    claim: DispatchClaim,
   ): Promise<void> {
     const result = await this.dataSource.transaction(async (manager) => {
       const transactionalCommandRepository =
@@ -342,7 +600,11 @@ export class CommandDispatcherService
         command.session.id,
       );
       if (!sessionId) {
-        await this.markFailed(command, transactionalCommandRepository);
+        await this.markFailed(
+          command,
+          transactionalCommandRepository,
+          claim,
+        );
         return null;
       }
 
@@ -350,22 +612,34 @@ export class CommandDispatcherService
       const connectorRepository = manager.getRepository(Connector);
       const session = await sessionRepository.findOneBy({ id: sessionId });
       if (!session) {
-        await this.markFailed(command, transactionalCommandRepository);
+        await this.markFailed(
+          command,
+          transactionalCommandRepository,
+          claim,
+        );
         return null;
       }
 
       if (
         !(
-          await this.updatePendingCommand(transactionalCommandRepository, command, {
+          await this.updateClaimedCommand(
+            transactionalCommandRepository,
+            command,
+            claim,
+            {
             status: DeviceCommandStatus.FAILED,
             nextAttemptAt: null,
-          })
+            },
+          )
         )
       ) {
         return null;
       }
       command.status = DeviceCommandStatus.FAILED;
       command.nextAttemptAt = null;
+      command.dispatchClaimToken = null;
+      command.dispatchClaimedAt = null;
+      command.dispatchVersion = claim.version + 1;
 
       if (
         session.status !== ChargingSessionStatus.PENDING &&
@@ -470,7 +744,10 @@ export class CommandDispatcherService
   private async dispatchPending(): Promise<void> {
     const commandRepository = this.dataSource.getRepository(DeviceCommand);
     const commands = await commandRepository.find({
-      where: { status: DeviceCommandStatus.PENDING },
+      where: [
+        { status: DeviceCommandStatus.PENDING },
+        { status: DeviceCommandStatus.DISPATCHING },
+      ],
     });
 
     for (const command of commands) {
@@ -567,6 +844,16 @@ function assertStartCommandExpiry(expiresAt: string): void {
   ) {
     throw new DefinitiveStartCommandError();
   }
+}
+
+function normalizedDispatchVersion(value: unknown): number {
+  return Number.isInteger(value) && typeof value === "number" && value >= 0
+    ? value
+    : 0;
+}
+
+function incrementDispatchVersion(): () => string {
+  return () => '"dispatch_version" + 1';
 }
 
 async function lockChargingSessionId(
