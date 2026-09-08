@@ -155,13 +155,11 @@ describe("Charging reliability with local PostgreSQL", () => {
     );
     const service = new ChargingService(dataSource, dispatcher);
 
-    vi.useFakeTimers();
     try {
       await expect(service.retryStart(fixture.session.id)).resolves.toEqual({
         accepted: true,
       });
-      await Promise.resolve();
-      await Promise.resolve();
+      await expect.poll(() => iotClient.isHealthy.mock.calls.length).toBe(1);
 
       const pendingCommand = await dataSource
         .getRepository(DeviceCommand)
@@ -173,7 +171,12 @@ describe("Charging reliability with local PostgreSQL", () => {
       expect(iotClient.start).not.toHaveBeenCalled();
       expect(pendingCommand).toMatchObject({ retryCount: 0, nextAttemptAt: null });
 
-      await vi.advanceTimersByTimeAsync(250);
+      await expect
+        .poll(() => iotClient.start.mock.calls.length, {
+          interval: 10,
+          timeout: 1_000,
+        })
+        .toBe(1);
 
       const dispatchedCommand = await dataSource
         .getRepository(DeviceCommand)
@@ -187,7 +190,6 @@ describe("Charging reliability with local PostgreSQL", () => {
       });
     } finally {
       dispatcher.onApplicationShutdown();
-      vi.useRealTimers();
     }
   });
 
