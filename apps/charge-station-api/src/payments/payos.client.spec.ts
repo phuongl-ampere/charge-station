@@ -7,9 +7,29 @@ import {
   PayosPaymentLinkDefinitiveError,
 } from "./payos.client.js";
 
+const payosEnvironmentKeys = [
+  "PAYOS_MODE",
+  "PAYOS_CLIENT_ID",
+  "PAYOS_API_KEY",
+  "PAYOS_CHECKSUM_KEY",
+  "PAYOS_RETURN_URL",
+  "PAYOS_CANCEL_URL",
+  "PAYOS_REQUEST_TIMEOUT_MS",
+] as const;
+const originalPayosEnvironment = new Map(
+  payosEnvironmentKeys.map((key) => [key, process.env[key]]),
+);
+
 describe("PayosClient mock provider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    for (const [key, value] of originalPayosEnvironment) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
   });
 
   it("creates a deterministic local checkout without a network request", async () => {
@@ -78,6 +98,49 @@ describe("PayosClient mock provider", () => {
       httpStatus: 503,
     });
   });
+
+  it.each([
+    ["uses the default when unset", undefined, 10_000],
+    ["clamps a too-small value", "1", 1_000],
+    ["uses a configured value", "7500", 7_500],
+    ["clamps a too-large value", "60001", 60_000],
+  ])(
+    "%s for a live creation request",
+    async (_label, timeoutValue, expectedTimeout) => {
+      process.env.PAYOS_MODE = "live";
+      process.env.PAYOS_CLIENT_ID = "client-id";
+      process.env.PAYOS_API_KEY = "api-key";
+      process.env.PAYOS_CHECKSUM_KEY = "checksum-key";
+      process.env.PAYOS_RETURN_URL = "https://example.test/return";
+      process.env.PAYOS_CANCEL_URL = "https://example.test/cancel";
+      if (timeoutValue === undefined) {
+        delete process.env.PAYOS_REQUEST_TIMEOUT_MS;
+      } else {
+        process.env.PAYOS_REQUEST_TIMEOUT_MS = timeoutValue;
+      }
+      const post = vi.spyOn(axios, "post").mockResolvedValue({
+        data: {
+          code: "00",
+          data: {
+            checkoutUrl: "https://pay.example/100001",
+            paymentLinkId: "pl_100001",
+          },
+        },
+      } as never);
+
+      await expect(
+        new PayosClient().createPaymentLink(createInput()),
+      ).resolves.toMatchObject({
+        checkoutUrl: "https://pay.example/100001",
+      });
+
+      expect(post).toHaveBeenCalledWith(
+        "https://api-merchant.payos.vn/v2/payment-requests",
+        expect.any(Object),
+        expect.objectContaining({ timeout: expectedTimeout }),
+      );
+    },
+  );
 
   it("classifies a malformed successful creation response as definitive", async () => {
     vi.spyOn(axios, "post").mockResolvedValue({
@@ -176,8 +239,24 @@ describe("PayosClient mock provider", () => {
           "x-api-key": "api-key",
           "content-type": "application/json",
         },
+        timeout: 10_000,
       },
     );
+  });
+
+  it("classifies a timed-out live payment-link lookup as ambiguous", async () => {
+    vi.spyOn(axios, "get").mockRejectedValue(
+      Object.assign(new Error("timeout"), {
+        isAxiosError: true,
+        code: "ECONNABORTED",
+      }),
+    );
+
+    await expect(
+      createLiveClient().getPaymentLinkInfo(100001),
+    ).rejects.toMatchObject({
+      classification: "AMBIGUOUS",
+    });
   });
 });
 

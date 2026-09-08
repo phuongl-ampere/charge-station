@@ -191,6 +191,58 @@ describe("Charging reliability with local PostgreSQL", () => {
     }
   });
 
+  it("keeps a stop command pending at retry zero until IoT health recovers", async () => {
+    const fixture = await createFixture(
+      ChargingSessionStatus.CHARGING,
+      ConnectorStatus.OCCUPIED,
+      DeviceCommandStatus.SENT,
+    );
+    const iotClient = {
+      isHealthy: vi
+        .fn()
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true),
+      start: vi.fn(),
+      stop: vi.fn().mockResolvedValue(undefined),
+    };
+    const dispatcher = new ImmediateCommandDispatcherService(
+      dataSource,
+      iotClient as unknown as IotServiceClient,
+    );
+    const service = new ChargingService(dataSource, dispatcher);
+
+    try {
+      await expect(service.stopSession(fixture.session.id)).resolves.toEqual({
+        accepted: true,
+      });
+      await expect.poll(() => iotClient.isHealthy.mock.calls.length).toBe(1);
+
+      const pendingCommand = await dataSource
+        .getRepository(DeviceCommand)
+        .findOneByOrFail({
+          session: { id: fixture.session.id },
+          commandType: "STOP_CHARGING",
+        });
+      expect(iotClient.isHealthy).toHaveBeenCalledTimes(1);
+      expect(iotClient.stop).not.toHaveBeenCalled();
+      expect(pendingCommand).toMatchObject({
+        status: DeviceCommandStatus.PENDING,
+        retryCount: 0,
+        nextAttemptAt: null,
+      });
+
+      await expect
+        .poll(() => iotClient.stop.mock.calls.length, {
+          interval: 10,
+          timeout: 1_000,
+        })
+        .toBe(1);
+      expect(iotClient.isHealthy).toHaveBeenCalledTimes(2);
+    } finally {
+      dispatcher.onApplicationShutdown();
+    }
+  });
+
   it("retains connector allocation after an ambiguous start transport outage", async () => {
     const fixture = await createFixture(
       ChargingSessionStatus.PENDING,
@@ -254,7 +306,7 @@ describe("Charging reliability with local PostgreSQL", () => {
       status: DeviceCommandStatus.FAILED,
       acknowledgedAt: null,
     });
-    const dispatcher = { dispatch: vi.fn().mockResolvedValue(undefined) };
+    const dispatcher = { dispatchWhenIotReady: vi.fn() };
     const service = new ChargingService(
       dataSource,
       dispatcher as unknown as CommandDispatcherService,
@@ -289,12 +341,12 @@ describe("Charging reliability with local PostgreSQL", () => {
     );
     expect(activeStop).toBeDefined();
     expect(session.status).toBe(ChargingSessionStatus.STOPPING);
-    expect(dispatcher.dispatch).toHaveBeenCalledTimes(2);
-    expect(dispatcher.dispatch).toHaveBeenNthCalledWith(
+    expect(dispatcher.dispatchWhenIotReady).toHaveBeenCalledTimes(2);
+    expect(dispatcher.dispatchWhenIotReady).toHaveBeenNthCalledWith(
       1,
       activeStop?.commandId,
     );
-    expect(dispatcher.dispatch).toHaveBeenNthCalledWith(
+    expect(dispatcher.dispatchWhenIotReady).toHaveBeenNthCalledWith(
       2,
       activeStop?.commandId,
     );
@@ -337,7 +389,7 @@ describe("Charging reliability with local PostgreSQL", () => {
       status: DeviceCommandStatus.FAILED,
       acknowledgedAt: null,
     });
-    const dispatcher = { dispatch: vi.fn().mockResolvedValue(undefined) };
+    const dispatcher = { dispatchWhenIotReady: vi.fn() };
     const service = new ChargingService(
       dataSource,
       dispatcher as unknown as CommandDispatcherService,

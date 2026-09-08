@@ -365,7 +365,7 @@ describe("ChargingController", () => {
       }),
     };
     const dispatcher = {
-      dispatch: vi.fn(async () => {
+      dispatchWhenIotReady: vi.fn(() => {
         expect(transactionCommitted).toBe(true);
       }),
     };
@@ -391,7 +391,7 @@ describe("ChargingController", () => {
       [session.id],
     );
     expect(sessionRepository.save).toHaveBeenCalledWith(session);
-    expect(dispatcher.dispatch).toHaveBeenCalledWith(
+    expect(dispatcher.dispatchWhenIotReady).toHaveBeenCalledWith(
       commandRepository.create.mock.results[0]?.value.commandId,
     );
     expect(session.status).toBe(ChargingSessionStatus.STOPPING);
@@ -496,45 +496,39 @@ describe("ChargingController", () => {
     expect(session.status).toBe(ChargingSessionStatus.STOPPING);
   });
 
-  it("returns accepted before a slow dispatcher completes", async () => {
+  it("returns accepted after queuing a readiness-gated stop dispatch", async () => {
+    const dispatchWhenIotReady = vi.fn();
     const { commandRepository, service } = createStopHarness(
-      () => new Promise<void>(() => undefined),
+      dispatchWhenIotReady,
     );
 
-    const response = await Promise.race([
-      service.stopSession("ses_1"),
-      new Promise<"timed out">((resolve) => {
-        setTimeout(() => resolve("timed out"), 25);
-      }),
-    ]);
+    const response = await service.stopSession("ses_1");
 
     expect(commandRepository.save).toHaveBeenCalledTimes(1);
     expect(response).toEqual({ accepted: true });
+    expect(dispatchWhenIotReady).toHaveBeenCalledWith(
+      commandRepository.create.mock.results[0]?.value.commandId,
+    );
   });
 
-  it("returns accepted and safely logs when asynchronous dispatch rejects", async () => {
+  it("returns accepted and safely logs when the dispatcher is unavailable", async () => {
     const logger = vi
       .spyOn(Logger.prototype, "error")
       .mockImplementation(() => undefined);
-    const { service } = createStopHarness(async () => {
-      throw new Error("dispatcher unavailable");
-    });
+    const { service } = createStopHarness();
 
     await expect(service.stopSession("ses_1")).resolves.toEqual({
       accepted: true,
     });
-    await vi.waitFor(() => {
-      expect(logger).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to dispatch stop command"),
-        expect.any(String),
-      );
-    });
+    expect(logger).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to dispatch stop command"),
+    );
     logger.mockRestore();
   });
 });
 
 function createStopHarness(
-  dispatch: (commandId: string) => Promise<void>,
+  dispatchWhenIotReady?: (commandId: string) => void,
   status = ChargingSessionStatus.CHARGING,
 ) {
   const session = {
@@ -566,9 +560,11 @@ function createStopHarness(
   return {
     commandRepository,
     session,
-    service: new ChargingService(
-      dataSource as unknown as DataSource,
-      { dispatch } as unknown as CommandDispatcherService,
-    ),
+    service: dispatchWhenIotReady
+      ? new ChargingService(
+          dataSource as unknown as DataSource,
+          { dispatchWhenIotReady } as unknown as CommandDispatcherService,
+        )
+      : new ChargingService(dataSource as unknown as DataSource),
   };
 }

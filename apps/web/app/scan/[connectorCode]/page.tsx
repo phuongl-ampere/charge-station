@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { DurationPicker } from "../../../components/DurationPicker";
+import { PaymentPending } from "../../../components/PaymentPending";
 import { PayosCheckout } from "../../../components/PayosCheckout";
 import {
   chargeApi,
@@ -22,6 +23,7 @@ export default function ScanConnectorPage() {
   const [checkout, setCheckout] = useState<CheckoutOrder | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [recoveringPaymentLink, setRecoveringPaymentLink] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -51,10 +53,11 @@ export default function ScanConnectorPage() {
         connectorCode,
         durationMinutes,
       });
-      if (result.realtimeAccessToken) {
+      const accessToken = result.realtimeAccessToken;
+      if (accessToken) {
         window.sessionStorage.setItem(
           `charge-token:${result.orderId}`,
-          result.realtimeAccessToken,
+          accessToken,
         );
       }
       setCheckout(result);
@@ -66,6 +69,36 @@ export default function ScanConnectorPage() {
       );
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function recoverPaymentLink(): Promise<void> {
+    const pendingCheckout = checkout;
+    const accessToken = pendingCheckout?.realtimeAccessToken;
+    if (!pendingCheckout || pendingCheckout.payment.checkoutUrl || !accessToken) {
+      return;
+    }
+
+    setRecoveringPaymentLink(true);
+    setError(null);
+    try {
+      const payment = await chargeApi.getPaymentLink(
+        pendingCheckout.orderId,
+        accessToken,
+      );
+      setCheckout((currentCheckout) =>
+        currentCheckout?.orderId === pendingCheckout.orderId
+          ? { ...currentCheckout, payment }
+          : currentCheckout,
+      );
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to recover the payment link",
+      );
+    } finally {
+      setRecoveringPaymentLink(false);
     }
   }
 
@@ -131,11 +164,21 @@ export default function ScanConnectorPage() {
               </button>
             </section>
           )}
-          {checkout && (
+          {checkout?.payment.checkoutUrl && (
             <PayosCheckout
               checkoutUrl={checkout.payment.checkoutUrl}
               amount={checkout.amount}
               currency={checkout.currency}
+              onViewStatus={viewStatus}
+            />
+          )}
+          {checkout && !checkout.payment.checkoutUrl && (
+            <PaymentPending
+              amount={checkout.amount}
+              currency={checkout.currency}
+              disabled={!checkout.realtimeAccessToken}
+              refreshing={recoveringPaymentLink}
+              onRefresh={recoverPaymentLink}
               onViewStatus={viewStatus}
             />
           )}

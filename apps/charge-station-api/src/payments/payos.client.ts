@@ -28,6 +28,7 @@ export interface PayosClientConfig {
   returnUrl: string;
   cancelUrl: string;
   mockCheckoutBaseUrl?: string;
+  requestTimeoutMs?: number;
 }
 
 interface PayosPaymentLinkResponse {
@@ -40,6 +41,9 @@ interface PayosPaymentLinkResponse {
 
 const PAYOS_PAYMENT_REQUEST_URL =
   "https://api-merchant.payos.vn/v2/payment-requests";
+const DEFAULT_PAYOS_REQUEST_TIMEOUT_MS = 10_000;
+const MIN_PAYOS_REQUEST_TIMEOUT_MS = 1_000;
+const MAX_PAYOS_REQUEST_TIMEOUT_MS = 60_000;
 
 interface PayosPaymentLinkErrorOptions {
   httpStatus?: number;
@@ -83,7 +87,14 @@ export class PayosPaymentLinkAmbiguousError extends PayosPaymentLinkCreationErro
 }
 
 export class PayosClient {
-  constructor(private readonly config: PayosClientConfig = readPayosConfig()) {}
+  private readonly config: PayosClientConfig & { requestTimeoutMs: number };
+
+  constructor(config: PayosClientConfig = readPayosConfig()) {
+    this.config = {
+      ...config,
+      requestTimeoutMs: normalizeRequestTimeout(config.requestTimeoutMs),
+    };
+  }
 
   get returnUrl(): string {
     return this.config.returnUrl;
@@ -132,6 +143,7 @@ export class PayosClient {
             "x-api-key": this.config.apiKey,
             "content-type": "application/json",
           },
+          timeout: this.config.requestTimeoutMs,
         },
       );
       return readPaymentLink(
@@ -139,7 +151,7 @@ export class PayosClient {
         "PayOS payment link creation failed",
       );
     } catch (error: unknown) {
-      throw classifyCreatePaymentLinkError(error);
+      throw classifyPaymentLinkError(error, "creation");
     }
   }
 
@@ -159,17 +171,22 @@ export class PayosClient {
       };
     }
 
-    const response = await axios.get<PayosPaymentLinkResponse>(
-      `${PAYOS_PAYMENT_REQUEST_URL}/${orderCode}`,
-      {
-        headers: {
-          "x-client-id": this.config.clientId,
-          "x-api-key": this.config.apiKey,
-          "content-type": "application/json",
+    try {
+      const response = await axios.get<PayosPaymentLinkResponse>(
+        `${PAYOS_PAYMENT_REQUEST_URL}/${orderCode}`,
+        {
+          headers: {
+            "x-client-id": this.config.clientId,
+            "x-api-key": this.config.apiKey,
+            "content-type": "application/json",
+          },
+          timeout: this.config.requestTimeoutMs,
         },
-      },
-    );
-    return readPaymentLink(response.data, "PayOS payment link lookup failed");
+      );
+      return readPaymentLink(response.data, "PayOS payment link lookup failed");
+    } catch (error: unknown) {
+      throw classifyPaymentLinkError(error, "lookup");
+    }
   }
 
   verifyWebhook(data: Record<string, unknown>, signature: string): boolean {
@@ -199,8 +216,9 @@ export class PayosClient {
   }
 }
 
-function classifyCreatePaymentLinkError(
+function classifyPaymentLinkError(
   error: unknown,
+  operation: "creation" | "lookup",
 ): PayosPaymentLinkCreationError {
   if (error instanceof PayosPaymentLinkCreationError) {
     return error;
@@ -210,18 +228,18 @@ function classifyCreatePaymentLinkError(
     const httpStatus = error.response?.status;
     if (httpStatus !== undefined && httpStatus >= 400 && httpStatus < 500) {
       return new PayosPaymentLinkDefinitiveError(
-        "PayOS payment link creation was rejected: " + httpStatus,
+        "PayOS payment link " + operation + " was rejected: " + httpStatus,
         { httpStatus, cause: error },
       );
     }
     return new PayosPaymentLinkAmbiguousError(
-      "PayOS payment link creation outcome is ambiguous",
+      "PayOS payment link " + operation + " outcome is ambiguous",
       { httpStatus, cause: error },
     );
   }
 
   return new PayosPaymentLinkAmbiguousError(
-    "PayOS payment link creation outcome is ambiguous",
+    "PayOS payment link " + operation + " outcome is ambiguous",
     { cause: error },
   );
 }
@@ -272,5 +290,24 @@ function readPayosConfig(): PayosClientConfig {
     cancelUrl:
       process.env.PAYOS_CANCEL_URL ?? "http://localhost:5173/charge/cancel",
     mockCheckoutBaseUrl: process.env.PAYOS_MOCK_CHECKOUT_BASE_URL,
+    requestTimeoutMs: readPayosRequestTimeout(),
   };
+}
+
+function readPayosRequestTimeout(): number | undefined {
+  const rawValue = process.env.PAYOS_REQUEST_TIMEOUT_MS;
+  if (rawValue === undefined || !/^\d+$/.test(rawValue)) {
+    return undefined;
+  }
+  return Number(rawValue);
+}
+
+function normalizeRequestTimeout(value: number | undefined): number {
+  if (!Number.isFinite(value) || value === undefined) {
+    return DEFAULT_PAYOS_REQUEST_TIMEOUT_MS;
+  }
+  return Math.min(
+    MAX_PAYOS_REQUEST_TIMEOUT_MS,
+    Math.max(MIN_PAYOS_REQUEST_TIMEOUT_MS, Math.floor(value)),
+  );
 }

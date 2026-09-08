@@ -53,6 +53,34 @@ describe("retryStart", () => {
 });
 
 describe("createOrder checkout URL validation", () => {
+  it("keeps an ambiguous payment response usable without a checkout URL", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        orderId: "ord_1",
+        amount: 10000,
+        currency: "VND",
+        payment: {
+          provider: "PAYOS",
+          paymentPending: true,
+        },
+        realtimeAccessToken: "order-capability",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      createChargeApi(localApiOrigin).createOrder({
+        connectorCode: "ST01-C01",
+        durationMinutes: 120,
+      }),
+    ).resolves.toMatchObject({
+      orderId: "ord_1",
+      payment: { provider: "PAYOS", paymentPending: true },
+      realtimeAccessToken: "order-capability",
+    });
+  });
+
   it("accepts a local mock checkout under the validated local API origin", async () => {
     mockOrderResponse(
       `${localApiOrigin}/payments/payos/mock/123?returnUrl=%2Fcharge%2Ford_1`,
@@ -95,6 +123,63 @@ describe("createOrder checkout URL validation", () => {
         connectorCode: "ST01-C01",
         durationMinutes: 120,
       }),
+    ).rejects.toThrow("Invalid checkout URL");
+  });
+});
+
+describe("payment-link recovery", () => {
+  it("uses the order capability and validates a recovered checkout URL", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        provider: "PAYOS",
+        checkoutUrl: localApiOrigin + "/payments/payos/mock/123",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createChargeApi(localApiOrigin) as unknown as {
+      getPaymentLink(
+        orderId: string,
+        accessToken: string,
+      ): Promise<{ provider: "PAYOS"; checkoutUrl?: string; paymentPending?: true }>;
+    };
+
+    await expect(
+      Promise.resolve().then(() =>
+        api.getPaymentLink("order/with spaces", "capability-token"),
+      ),
+    ).resolves.toEqual({
+      provider: "PAYOS",
+      checkoutUrl: localApiOrigin + "/payments/payos/mock/123",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      localApiOrigin + "/orders/order%2Fwith%20spaces/payment-link",
+      {
+        headers: { authorization: "Bearer capability-token" },
+      },
+    );
+  });
+
+  it("rejects an unsafe recovered checkout URL", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        provider: "PAYOS",
+        checkoutUrl: "https://pay.payos.vn.evil.example/web/abc123",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createChargeApi(localApiOrigin) as unknown as {
+      getPaymentLink(
+        orderId: string,
+        accessToken: string,
+      ): Promise<{ provider: "PAYOS"; checkoutUrl?: string; paymentPending?: true }>;
+    };
+
+    await expect(
+      Promise.resolve().then(() =>
+        api.getPaymentLink("ord_1", "capability-token"),
+      ),
     ).rejects.toThrow("Invalid checkout URL");
   });
 });

@@ -10,8 +10,14 @@ export interface CheckoutOrder {
   orderId: string;
   amount: number;
   currency: string;
-  payment: { provider: "PAYOS"; checkoutUrl: string };
+  payment: CheckoutPayment;
   realtimeAccessToken?: string;
+}
+
+export interface CheckoutPayment {
+  provider: "PAYOS";
+  checkoutUrl?: string;
+  paymentPending?: true;
 }
 
 export interface OrderStatus {
@@ -54,6 +60,10 @@ export interface ChargeApi {
     connectorCode: string;
     durationMinutes: number;
   }): Promise<CheckoutOrder>;
+  getPaymentLink(
+    orderId: string,
+    accessToken: string,
+  ): Promise<CheckoutPayment>;
   getOrder(orderId: string, accessToken: string): Promise<OrderStatus>;
   getSession(sessionId: string, accessToken: string): Promise<SessionStatus>;
   stopSession(
@@ -102,6 +112,19 @@ function validateCheckoutUrl(value: string, localOrigin: string): string {
   return url.toString();
 }
 
+function validateCheckoutPayment(
+  payment: CheckoutPayment,
+  localOrigin: string,
+): CheckoutPayment {
+  if (payment.checkoutUrl === undefined) {
+    return payment;
+  }
+  return {
+    ...payment,
+    checkoutUrl: validateCheckoutUrl(payment.checkoutUrl, localOrigin),
+  };
+}
+
 export const localApiOrigin = localOrigin(
   process.env.NEXT_PUBLIC_API_URL,
   "http://localhost:4000",
@@ -146,12 +169,18 @@ export function createChargeApi(origin = localApiOrigin): ChargeApi {
       });
       return {
         ...order,
-        payment: {
-          ...order.payment,
-          checkoutUrl: validateCheckoutUrl(order.payment.checkoutUrl, local),
-        },
+        payment: validateCheckoutPayment(order.payment, local),
       };
     },
+    getPaymentLink: async (orderId, accessToken) =>
+      validateCheckoutPayment(
+        await request<CheckoutPayment>(
+          local,
+          `/orders/${encodeURIComponent(orderId)}/payment-link`,
+          { headers: { authorization: `Bearer ${accessToken}` } },
+        ),
+        local,
+      ),
     getOrder: (orderId, accessToken) =>
       request<OrderStatus>(local, `/orders/${encodeURIComponent(orderId)}`, {
         headers: { authorization: `Bearer ${accessToken}` },

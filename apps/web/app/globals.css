@@ -340,6 +340,16 @@ input {
   display: grid;
   gap: 12px;
 }
+.payment-pending-content {
+  display: grid;
+  gap: 12px;
+  margin-top: 19px;
+}
+.payment-refresh-button {
+  align-items: center;
+  display: inline-flex;
+  gap: 7px;
+}
 .checkout-amount {
   margin: 0;
 }
