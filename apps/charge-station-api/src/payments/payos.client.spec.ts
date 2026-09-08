@@ -293,7 +293,9 @@ describe("PayosClient mock provider", () => {
   });
 
   it("uses PayOS client credentials when cancelling a live payment link", async () => {
-    const post = vi.spyOn(axios, "post").mockResolvedValue({} as never);
+    const post = vi.spyOn(axios, "post").mockResolvedValue({
+      data: { code: "00" },
+    } as never);
 
     await expect(
       createLiveClient().cancelPaymentLink(100001),
@@ -310,6 +312,35 @@ describe("PayosClient mock provider", () => {
         },
         timeout: 10_000,
       },
+    );
+  });
+
+  it("rejects a successful HTTP cancellation with a failed PayOS business code", async () => {
+    vi.spyOn(axios, "post").mockResolvedValue({
+      data: { code: "01" },
+    } as never);
+
+    await expect(
+      createLiveClient().cancelPaymentLink(100001),
+    ).rejects.toBeInstanceOf(PayosPaymentLinkDefinitiveError);
+  });
+
+  it("rejects a paid provider status that omits the charged amount", async () => {
+    vi.spyOn(axios, "get").mockResolvedValue({
+      data: {
+        code: "00",
+        data: {
+          paymentLinkId: "pl_100001",
+          status: "PAID",
+        },
+      },
+    } as never);
+    const client = createLiveClient() as unknown as {
+      getPaymentLinkStatus(orderCode: number): Promise<unknown>;
+    };
+
+    await expect(client.getPaymentLinkStatus(100001)).rejects.toBeInstanceOf(
+      PayosPaymentLinkDefinitiveError,
     );
   });
 

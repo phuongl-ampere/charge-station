@@ -27,6 +27,7 @@ import {
 type FailureMode = "none" | "timeout" | "offline" | "command_failed";
 type StopReason =
   | StopChargingCommand["reason"]
+  | "SYSTEM_REQUESTED"
   | "TIMER_EXPIRED"
   | "TIMEOUT"
   | "COMMAND_FAILED"
@@ -66,9 +67,14 @@ export class CommandsService implements OnModuleInit, OnModuleDestroy {
     for (const record of records) {
       this.enqueueCriticalRecord(record);
     }
+    this.reconcileInterruptedMockRuntime();
   }
 
   async onModuleDestroy(): Promise<void> {
+    for (const state of this.deviceState.getActiveStates()) {
+      this.deviceState.stop(state);
+      this.postStopped(state, "SYSTEM_REQUESTED");
+    }
     this.acceptingDeliveries = false;
     for (const timer of this.retryTimers.values()) {
       clearTimeout(timer);
@@ -232,6 +238,33 @@ export class CommandsService implements OnModuleInit, OnModuleDestroy {
       reason,
       relayState: state.relayState,
     });
+  }
+
+  private reconcileInterruptedMockRuntime(): void {
+    const latestByCommand = new Map<string, JournalRecord>();
+    for (const record of this.eventJournal.getRecords()) {
+      latestByCommand.set(record.event.commandId, record);
+    }
+
+    for (const record of latestByCommand.values()) {
+      if (record.event.type === "STOPPED") {
+        continue;
+      }
+      const recoveryEvent: DeviceEvent = {
+        eventId: randomUUID(),
+        commandId: record.event.commandId,
+        sessionId: record.event.sessionId,
+        deviceId: record.event.deviceId,
+        connectorCode: record.event.connectorCode,
+        type: "STOPPED",
+        occurredAt: new Date().toISOString(),
+        payload: {
+          reason: "SYSTEM_REQUESTED",
+          relayState: "OFF",
+        },
+      };
+      this.persistCriticalEvent(recoveryEvent);
+    }
   }
 
   private postEvent(

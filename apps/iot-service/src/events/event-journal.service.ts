@@ -114,6 +114,13 @@ export class EventJournalService implements OnModuleDestroy {
       .map(cloneRecord);
   }
 
+  getRecords(): JournalRecord[] {
+    this.initialize();
+    return this.records
+      .sort((left, right) => left.sequence - right.sequence)
+      .map(cloneRecord);
+  }
+
   onModuleDestroy(): void {}
 
   private load(): void {

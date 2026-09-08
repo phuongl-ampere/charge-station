@@ -6,6 +6,8 @@ import type {
 } from "@charge-station/contracts";
 
 const HEALTH_PROBE_TIMEOUT_MS = 1_000;
+const DEFAULT_COMMAND_REQUEST_TIMEOUT_MS = 5_000;
+const MAX_COMMAND_REQUEST_TIMEOUT_MS = 60_000;
 
 @Injectable()
 export class IotServiceClient {
@@ -51,6 +53,7 @@ export class IotServiceClient {
           "x-service-token": serviceToken,
         },
         body: JSON.stringify(command),
+        signal: AbortSignal.timeout(commandRequestTimeoutMs()),
       });
     } catch {
       throw new IotTransportError("IoT Service command request failed");
@@ -127,6 +130,14 @@ export class IotServiceClient {
 export class IotTransportError extends Error {}
 
 export class IotCommandRejectedError extends Error {}
+
+function commandRequestTimeoutMs(): number {
+  const configured = Number(process.env.IOT_COMMAND_REQUEST_TIMEOUT_MS);
+  if (!Number.isFinite(configured) || configured <= 0) {
+    return DEFAULT_COMMAND_REQUEST_TIMEOUT_MS;
+  }
+  return Math.min(Math.floor(configured), MAX_COMMAND_REQUEST_TIMEOUT_MS);
+}
 
 function isAcceptedCommandResponse(
   body: unknown,

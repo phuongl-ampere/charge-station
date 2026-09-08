@@ -25,6 +25,7 @@ describe("IotServiceClient", () => {
   afterEach(() => {
     delete process.env.IOT_SERVICE_URL;
     delete process.env.SERVICE_TOKEN;
+    delete process.env.IOT_COMMAND_REQUEST_TIMEOUT_MS;
     vi.unstubAllGlobals();
   });
 
@@ -51,7 +52,28 @@ describe("IotServiceClient", () => {
         headers: expect.objectContaining({
           "x-service-token": "local-token",
         }),
+        signal: expect.any(AbortSignal),
       }),
+    );
+  });
+
+  it("uses a bounded command timeout", async () => {
+    process.env.IOT_SERVICE_URL = "http://localhost:4100";
+    process.env.SERVICE_TOKEN = "local-token";
+    process.env.IOT_COMMAND_REQUEST_TIMEOUT_MS = "25";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ commandId: command.commandId, accepted: true }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new IotServiceClient().start(command);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:4100/internal/commands/start",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
 

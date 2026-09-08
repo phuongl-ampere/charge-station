@@ -240,18 +240,27 @@ export class PayosClient {
       return;
     }
 
-    await axios.post(
-      `${PAYOS_PAYMENT_REQUEST_URL}/${orderCode}/cancel`,
-      undefined,
-      {
-        headers: {
-          "x-client-id": this.config.clientId,
-          "x-api-key": this.config.apiKey,
-          "content-type": "application/json",
+    try {
+      const response = await axios.post<PayosPaymentLinkResponse>(
+        `${PAYOS_PAYMENT_REQUEST_URL}/${orderCode}/cancel`,
+        undefined,
+        {
+          headers: {
+            "x-client-id": this.config.clientId,
+            "x-api-key": this.config.apiKey,
+            "content-type": "application/json",
+          },
+          timeout: this.config.requestTimeoutMs,
         },
-        timeout: this.config.requestTimeoutMs,
-      },
-    );
+      );
+      if (response.data.code !== "00") {
+        throw new PayosPaymentLinkDefinitiveError(
+          "PayOS payment link cancellation was rejected",
+        );
+      }
+    } catch (error: unknown) {
+      throw classifyPaymentLinkError(error, "cancellation");
+    }
   }
 
   verifyWebhook(data: Record<string, unknown>, signature: string): boolean {
@@ -283,7 +292,7 @@ export class PayosClient {
 
 function classifyPaymentLinkError(
   error: unknown,
-  operation: "creation" | "lookup",
+  operation: "creation" | "lookup" | "cancellation",
 ): PayosPaymentLinkCreationError {
   if (error instanceof PayosPaymentLinkCreationError) {
     return error;
@@ -344,6 +353,11 @@ function readPaymentLinkStatus(
     amount?: unknown;
     paymentLinkId?: unknown;
   };
+  if (data.status.toUpperCase() === "PAID" && data.amount === undefined) {
+    throw new PayosPaymentLinkDefinitiveError(
+      "PayOS PAID payment link status is missing its amount",
+    );
+  }
   return {
     status: data.status,
     ...(typeof data.amount === "number" && Number.isFinite(data.amount)

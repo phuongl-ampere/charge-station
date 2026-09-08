@@ -315,6 +315,45 @@ describe("CommandsService", () => {
     expect(await restartedJournal.getUndelivered()).toEqual([]);
   });
 
+  it("reconciles an interrupted mock runtime with a durable terminal STOPPED event", async () => {
+    const path = await journalPath();
+    const journal = new EventJournalService(path);
+    const running = {
+      eventId: "event-running-after-restart",
+      commandId: "command-running-after-restart",
+      sessionId: "session-running-after-restart",
+      deviceId: "dev_ST01",
+      connectorCode: "ST01-C01",
+      type: "RUNNING" as const,
+      occurredAt: new Date().toISOString(),
+      payload: { relayState: "ON", remainingSeconds: 300 },
+    };
+    await journal.initialize();
+    await journal.append(running);
+    await journal.markDelivered(running.eventId);
+
+    const restarted = new CommandsService(
+      eventClient as unknown as ChargeStationEventClient,
+      new DeviceStateService(),
+      new EventJournalService(path),
+    );
+    await restarted.onModuleInit();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(eventClient.post).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandId: running.commandId,
+        sessionId: running.sessionId,
+        type: "STOPPED",
+        payload: {
+          reason: "SYSTEM_REQUESTED",
+          relayState: "OFF",
+        },
+      }),
+    );
+    await restarted.onModuleDestroy();
+  });
+
   it.each([
     ["command_failed", "COMMAND_FAILED"],
     ["offline", "DEVICE_OFFLINE"],

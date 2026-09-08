@@ -53,6 +53,12 @@ export class DeviceStateService implements OnModuleDestroy {
     return this.stopResponses.get(commandId);
   }
 
+  getActiveStates(): DeviceRuntimeState[] {
+    return [...this.commands.values()].filter(
+      (state) => state.status !== "STOPPED",
+    );
+  }
+
   add(command: StartChargingCommand, deviceId: string): DeviceRuntimeState {
     const state: DeviceRuntimeState = {
       command,
