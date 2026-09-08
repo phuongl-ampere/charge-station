@@ -32,6 +32,35 @@ describe("PayosClient mock provider", () => {
     }
   });
 
+  it.each([
+    ["missing mode", undefined],
+    ["an unsupported mode", "test"],
+  ])("rejects %s instead of silently enabling mock payments", (_name, mode) => {
+    if (mode === undefined) {
+      delete process.env.PAYOS_MODE;
+    } else {
+      process.env.PAYOS_MODE = mode;
+    }
+    process.env.PAYOS_CLIENT_ID = "client-id";
+    process.env.PAYOS_API_KEY = "api-key";
+    process.env.PAYOS_CHECKSUM_KEY = "checksum-key";
+    process.env.PAYOS_RETURN_URL = "https://example.test/return";
+    process.env.PAYOS_CANCEL_URL = "https://example.test/cancel";
+
+    expect(() => new PayosClient()).toThrow("PAYOS_MODE must be mock or live");
+  });
+
+  it("rejects live mode without explicit credentials", () => {
+    process.env.PAYOS_MODE = "live";
+    delete process.env.PAYOS_CLIENT_ID;
+    delete process.env.PAYOS_API_KEY;
+    delete process.env.PAYOS_CHECKSUM_KEY;
+    process.env.PAYOS_RETURN_URL = "https://example.test/return";
+    process.env.PAYOS_CANCEL_URL = "https://example.test/cancel";
+
+    expect(() => new PayosClient()).toThrow("PAYOS_CLIENT_ID must be configured");
+  });
+
   it("creates a deterministic local checkout without a network request", async () => {
     const client = new PayosClient({
       mode: "mock",

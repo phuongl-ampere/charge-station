@@ -380,18 +380,29 @@ function isPaymentLinkResponse(
 }
 
 function readPayosConfig(): PayosClientConfig {
+  const mode = process.env.PAYOS_MODE;
+  if (mode !== "mock" && mode !== "live") {
+    throw new Error("PAYOS_MODE must be mock or live");
+  }
+
   return {
-    mode: process.env.PAYOS_MODE === "live" ? "live" : "mock",
-    clientId: process.env.PAYOS_CLIENT_ID ?? "mock-client-id",
-    apiKey: process.env.PAYOS_API_KEY ?? "mock-api-key",
-    checksumKey: process.env.PAYOS_CHECKSUM_KEY ?? "mock-checksum-key",
-    returnUrl:
-      process.env.PAYOS_RETURN_URL ?? "http://localhost:5173/charge/return",
-    cancelUrl:
-      process.env.PAYOS_CANCEL_URL ?? "http://localhost:5173/charge/cancel",
+    mode,
+    clientId: requiredPayosEnvironment("PAYOS_CLIENT_ID"),
+    apiKey: requiredPayosEnvironment("PAYOS_API_KEY"),
+    checksumKey: requiredPayosEnvironment("PAYOS_CHECKSUM_KEY"),
+    returnUrl: requiredPayosEnvironment("PAYOS_RETURN_URL"),
+    cancelUrl: requiredPayosEnvironment("PAYOS_CANCEL_URL"),
     mockCheckoutBaseUrl: process.env.PAYOS_MOCK_CHECKOUT_BASE_URL,
     requestTimeoutMs: readPayosRequestTimeout(),
   };
+}
+
+function requiredPayosEnvironment(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(name + " must be configured");
+  }
+  return value;
 }
 
 function readPayosRequestTimeout(): number | undefined {

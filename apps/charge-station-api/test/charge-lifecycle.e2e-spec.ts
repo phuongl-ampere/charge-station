@@ -102,6 +102,8 @@ describe("mock payment-to-charging lifecycle", () => {
     PAYOS_CHECKSUM_KEY: "charge-lifecycle-checksum-key",
     PAYOS_CLIENT_ID: "test-client-id",
     PAYOS_MODE: "mock",
+    PAYOS_RETURN_URL: "http://localhost:3000/charge/return",
+    PAYOS_CANCEL_URL: "http://localhost:3000/charge/cancel",
     SERVICE_TOKEN: "charge-lifecycle-service-token",
     IOT_EVENT_JOURNAL_PATH: "",
   };
