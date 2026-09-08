@@ -150,6 +150,43 @@ async function mockAmbiguousLocalApi(
   };
 }
 
+async function mockReturnCapabilityApi(
+  page: import("@playwright/test").Page,
+): Promise<{ authorizedOrderRead: () => boolean }> {
+  let sawAuthorizedOrderRead = false;
+  await page.context().route("http://localhost:4000/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === "GET" && url.pathname === "/orders/ord_return") {
+      if (route.request().headers()["authorization"] !== "Bearer returned-capability") {
+        await route.fulfill({
+          contentType: "application/json",
+          status: 401,
+          body: JSON.stringify({ message: "Missing order capability" }),
+        });
+        return;
+      }
+      sawAuthorizedOrderRead = true;
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "ord_return",
+          status: "PENDING_PAYMENT",
+          amountVnd: 10000,
+          currency: "VND",
+          durationMinutes: 120,
+          connectorCode: "ST01-C01",
+          payment: { provider: "PAYOS", status: "PENDING" },
+        }),
+      });
+      return;
+    }
+    await route.fulfill({ status: 404, body: "mock route not found" });
+  });
+  return {
+    authorizedOrderRead: () => sawAuthorizedOrderRead,
+  };
+}
+
 test("selects a duration, opens local PayOS checkout, and shows payment waiting", async ({
   page,
 }, testInfo) => {
@@ -220,4 +257,25 @@ test("recovers an ambiguous payment link with its stored order capability", asyn
   );
   await page.getByRole("button", { name: "Open PayOS checkout" }).click();
   await checkout;
+});
+
+test("stores a PayOS return capability from the fragment before loading charge status", async ({
+  page,
+}) => {
+  const api = await mockReturnCapabilityApi(page);
+
+  await page.goto("/charge/ord_return#charge_access=returned-capability");
+
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.sessionStorage.getItem("charge-token:ord_return"),
+      ),
+    )
+    .toBe("returned-capability");
+  await expect.poll(() => page.url()).toBe("http://127.0.0.1:3100/charge/ord_return");
+  await expect(
+    page.getByRole("heading", { name: "Waiting for payment" }),
+  ).toBeVisible();
+  await expect.poll(api.authorizedOrderRead).toBe(true);
 });

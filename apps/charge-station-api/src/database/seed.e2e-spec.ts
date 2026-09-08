@@ -63,7 +63,7 @@ describe('database seed lifecycle', () => {
       .findOneBy({ code: 'ST01-C01' });
     const migrations = await dataSource.query('SELECT * FROM "migrations"');
 
-    expect(migrations).toHaveLength(4);
+    expect(migrations).toHaveLength(5);
     expect(station).toMatchObject({
       code: 'ST01',
       name: 'Demo Station',

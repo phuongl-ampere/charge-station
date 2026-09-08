@@ -202,6 +202,43 @@ describe("PayosClient mock provider", () => {
     expect(get).not.toHaveBeenCalled();
   });
 
+  it("cancels a deterministic local checkout without a network request", async () => {
+    const client = new PayosClient({
+      mode: "mock",
+      clientId: "client-id",
+      apiKey: "api-key",
+      checksumKey: "checksum-key",
+      returnUrl: "http://localhost:5173/charge/return",
+      cancelUrl: "http://localhost:5173/charge/cancel",
+    });
+    const post = vi.spyOn(axios, "post");
+
+    await expect(client.cancelPaymentLink(100001)).resolves.toBeUndefined();
+
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("uses PayOS client credentials when cancelling a live payment link", async () => {
+    const post = vi.spyOn(axios, "post").mockResolvedValue({} as never);
+
+    await expect(
+      createLiveClient().cancelPaymentLink(100001),
+    ).resolves.toBeUndefined();
+
+    expect(post).toHaveBeenCalledWith(
+      "https://api-merchant.payos.vn/v2/payment-requests/100001/cancel",
+      undefined,
+      {
+        headers: {
+          "x-client-id": "client-id",
+          "x-api-key": "api-key",
+          "content-type": "application/json",
+        },
+        timeout: 10_000,
+      },
+    );
+  });
+
   it("uses PayOS client credentials when looking up a live payment link", async () => {
     const get = vi.spyOn(axios, "get").mockResolvedValue({
       data: {

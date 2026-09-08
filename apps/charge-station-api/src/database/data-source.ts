@@ -17,6 +17,7 @@ import { InitialSchemaMigration } from './migrations/001-initial-schema.js';
 import { AddDeviceCommandRetryAndSessionState } from './migrations/002-device-command-retry-and-session-state.js';
 import { AddDeviceCommandSessionTypeUnique } from './migrations/003-device-command-session-type-unique.js';
 import { AddActiveDeviceCommandSessionTypeUnique } from './migrations/004-device-command-active-index.js';
+import { AddPaymentReservationExpiry } from './migrations/005-payment-reservation-expiry.js';
 
 export enum UserRole {
   CUSTOMER = 'CUSTOMER',
@@ -217,6 +218,9 @@ export class PaymentTransaction {
   @Column({ type: 'varchar', default: PaymentTransactionStatus.PENDING })
   status!: PaymentTransactionStatus;
 
+  @Column({ name: 'expires_at', type: 'timestamptz' })
+  expiresAt!: Date;
+
   @Column({ name: 'raw_webhook_payload', type: 'jsonb', nullable: true })
   rawWebhookPayload!: Record<string, unknown> | null;
 
@@ -371,6 +375,7 @@ export const migrations = [
   AddDeviceCommandRetryAndSessionState,
   AddDeviceCommandSessionTypeUnique,
   AddActiveDeviceCommandSessionTypeUnique,
+  AddPaymentReservationExpiry,
 ];
 
 export const databaseOptions: DataSourceOptions = {

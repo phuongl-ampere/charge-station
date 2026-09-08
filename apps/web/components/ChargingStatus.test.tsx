@@ -327,6 +327,7 @@ describe("ChargingStatus", () => {
   });
 
   it("does not expose retry when the device has not reported a start failure", async () => {
+    const user = userEvent.setup();
     const api = {
       getOrder: vi.fn().mockResolvedValue({
         amountVnd: 5000,
@@ -348,7 +349,7 @@ describe("ChargingStatus", () => {
         timerAuthority: "DEVICE",
       }),
       retryStart: vi.fn(),
-      stopSession: vi.fn(),
+      stopSession: vi.fn().mockResolvedValue({ accepted: true }),
     };
 
     render(
@@ -370,6 +371,13 @@ describe("ChargingStatus", () => {
     expect(
       screen.queryByRole("button", { name: "Retry charging start" }),
     ).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Stop charging" }),
+    );
+    expect(api.stopSession).toHaveBeenCalledWith(
+      "ses_1",
+      "capability-token",
+    );
   });
 
   it("removes retry access when its session capability is unavailable", async () => {

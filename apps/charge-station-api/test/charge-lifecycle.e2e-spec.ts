@@ -82,6 +82,7 @@ describe("mock payment-to-charging lifecycle", () => {
   let dataSource: DataSource;
   let payosClient: RecordedMockPayosClient;
   let deviceState: ShortLifecycleDeviceStateService;
+  let initialDeliveryEvents: Map<"COMMAND_ACCEPTED" | "RUNNING", DeviceEvent[]>;
   let stoppedDeliveryEventIds: string[];
   let apiBaseUrl: string;
   const environment = new Map<string, string | undefined>();
@@ -192,6 +193,7 @@ describe("mock payment-to-charging lifecycle", () => {
     process.env.CHARGE_STATION_API_URL = apiBaseUrl;
 
     deviceState = new ShortLifecycleDeviceStateService();
+    initialDeliveryEvents = new Map();
     stoppedDeliveryEventIds = [];
     const eventClient = new ChargeStationEventClient();
     const iotModule = await Test.createTestingModule({
@@ -202,6 +204,14 @@ describe("mock payment-to-charging lifecycle", () => {
       .overrideProvider(ChargeStationEventClient)
       .useValue({
         post: async (event: DeviceEvent) => {
+          if (event.type === "COMMAND_ACCEPTED" || event.type === "RUNNING") {
+            const deliveries = initialDeliveryEvents.get(event.type) ?? [];
+            deliveries.push(event);
+            initialDeliveryEvents.set(event.type, deliveries);
+            if (deliveries.length === 1) {
+              throw new Error(`simulated lost ${event.type} callback`);
+            }
+          }
           if (event.type === "STOPPED") {
             stoppedDeliveryEventIds.push(event.eventId);
             if (stoppedDeliveryEventIds.length === 1) {
@@ -233,7 +243,7 @@ describe("mock payment-to-charging lifecycle", () => {
     }
   });
 
-  it("retries a lost STOPPED callback and completes only after the API acknowledges it", async () => {
+  it("retries lost initial callbacks, reaches CHARGING, and accepts a stop request", async () => {
     await request(api.getHttpServer())
       .get("/health")
       .expect(200)
@@ -305,6 +315,11 @@ describe("mock payment-to-charging lifecycle", () => {
     );
     expect(runningSession.timerAuthority).toBe("DEVICE");
     expect(deviceState.getSession(runningSession.id)?.status).toBe("RUNNING");
+    for (const type of ["COMMAND_ACCEPTED", "RUNNING"] as const) {
+      const deliveries = initialDeliveryEvents.get(type);
+      expect(deliveries).toHaveLength(2);
+      expect(deliveries?.[1]).toEqual(deliveries?.[0]);
+    }
     await eventually(
       () =>
         dataSource.getRepository(DeviceEvent).countBy({
@@ -319,12 +334,18 @@ describe("mock payment-to-charging lifecycle", () => {
       Date.now() + 50 * 60_000,
     );
 
-    const completedSession = await eventually(
+    await request(api.getHttpServer())
+      .post(`/sessions/${runningSession.id}/stop`)
+      .set("authorization", `Bearer ${accessToken}`)
+      .expect(202)
+      .expect({ accepted: true });
+
+    const stoppedSession = await eventually(
       () => readSession(api, created.body.orderId, accessToken),
-      (session) => session.status === ChargingSessionStatus.COMPLETED,
+      (session) => session.status === ChargingSessionStatus.CANCELLED,
       3_000,
     );
-    expect(completedSession.status).toBe(ChargingSessionStatus.COMPLETED);
+    expect(stoppedSession.status).toBe(ChargingSessionStatus.CANCELLED);
     expect(stoppedDeliveryEventIds).toHaveLength(2);
     expect(stoppedDeliveryEventIds[1]).toBe(stoppedDeliveryEventIds[0]);
     expect(

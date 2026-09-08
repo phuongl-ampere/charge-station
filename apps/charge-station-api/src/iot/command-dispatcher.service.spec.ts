@@ -24,6 +24,7 @@ describe("CommandDispatcherService", () => {
     const commandRepository = {
       findOne: vi.fn().mockResolvedValue(command),
       save: vi.fn().mockImplementation(async (entity) => entity),
+      update: conditionalCommandUpdate(command),
     };
     const dataSource = {
       getRepository: vi.fn().mockReturnValue(commandRepository),
@@ -48,7 +49,53 @@ describe("CommandDispatcherService", () => {
       configVersion: 1,
     });
     expect(command.status).toBe(DeviceCommandStatus.SENT);
-    expect(commandRepository.save).toHaveBeenCalledWith(command);
+    expect(commandRepository.update).toHaveBeenCalledWith(
+      {
+        commandId: command.commandId,
+        status: DeviceCommandStatus.PENDING,
+      },
+      {
+        status: DeviceCommandStatus.SENT,
+        nextAttemptAt: null,
+      },
+    );
+  });
+
+  it("does not overwrite an ACKED command when the device event wins after send", async () => {
+    const command = createCommand();
+    const commandRepository = {
+      findOne: vi.fn().mockResolvedValue(command),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+      update: vi.fn().mockImplementation(async () => {
+        command.status = DeviceCommandStatus.ACCEPTED;
+        return { affected: 0 };
+      }),
+    };
+    const dataSource = {
+      getRepository: vi.fn().mockReturnValue(commandRepository),
+    };
+    const iotClient = {
+      start: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new CommandDispatcherService(
+      dataSource as unknown as DataSource,
+      iotClient as unknown as IotServiceClient,
+    );
+
+    await service.dispatch(command.commandId);
+
+    expect(commandRepository.update).toHaveBeenCalledWith(
+      {
+        commandId: command.commandId,
+        status: DeviceCommandStatus.PENDING,
+      },
+      {
+        status: DeviceCommandStatus.SENT,
+        nextAttemptAt: null,
+      },
+    );
+    expect(commandRepository.save).not.toHaveBeenCalled();
+    expect(command.status).toBe(DeviceCommandStatus.ACCEPTED);
   });
 
   it("sends a persisted stop command through the same dispatcher", async () => {
@@ -62,6 +109,7 @@ describe("CommandDispatcherService", () => {
     const commandRepository = {
       findOne: vi.fn().mockResolvedValue(command),
       save: vi.fn().mockImplementation(async (entity) => entity),
+      update: conditionalCommandUpdate(command),
     };
     const dataSource = {
       getRepository: vi.fn().mockReturnValue(commandRepository),
@@ -95,13 +143,15 @@ describe("CommandDispatcherService", () => {
     }> = [];
     const commandRepository = {
       findOne: vi.fn().mockResolvedValue(command),
-      save: vi.fn().mockImplementation(async (entity: DeviceCommand) => {
+      save: vi.fn().mockImplementation(async (entity: DeviceCommand) => entity),
+      update: vi.fn().mockImplementation(async (_criteria, values) => {
+        Object.assign(command, values);
         saves.push({
-          nextAttemptAt: entity.nextAttemptAt,
-          retryCount: entity.retryCount,
-          status: entity.status,
+          nextAttemptAt: command.nextAttemptAt,
+          retryCount: command.retryCount,
+          status: command.status,
         });
-        return entity;
+        return { affected: 1 };
       }),
     };
     const dataSource = {
@@ -196,6 +246,7 @@ describe("CommandDispatcherService", () => {
     const commandRepository = {
       findOne: vi.fn().mockResolvedValue(command),
       save: vi.fn().mockImplementation(async (entity) => entity),
+      update: conditionalCommandUpdate(command),
     };
     const sessionRepository = {
       findOneBy: vi.fn().mockResolvedValue(command.session),
@@ -287,6 +338,7 @@ describe("CommandDispatcherService", () => {
     const commandRepository = {
       findOne: vi.fn().mockResolvedValue(command),
       save: vi.fn().mockImplementation(async (entity) => entity),
+      update: conditionalCommandUpdate(command),
     };
     const dataSource = {
       getRepository: vi.fn().mockReturnValue(commandRepository),
@@ -428,6 +480,7 @@ describe("CommandDispatcherService", () => {
       find: vi.fn().mockResolvedValue([command]),
       findOne: vi.fn().mockResolvedValue(command),
       save: vi.fn().mockImplementation(async (entity) => entity),
+      update: conditionalCommandUpdate(command),
     };
     const dataSource = {
       getRepository: vi.fn().mockReturnValue(commandRepository),
@@ -466,7 +519,7 @@ describe("CommandDispatcherService", () => {
       expect(iotClient.start).toHaveBeenCalledTimes(1);
       expect(command.retryCount).toBe(0);
       expect(command.status).toBe(DeviceCommandStatus.SENT);
-      expect(commandRepository.save).toHaveBeenCalledTimes(1);
+      expect(commandRepository.update).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -486,6 +539,7 @@ describe("CommandDispatcherService", () => {
     const commandRepository = {
       findOne: vi.fn().mockResolvedValue(command),
       save: vi.fn().mockImplementation(async (entity) => entity),
+      update: conditionalCommandUpdate(command),
     };
     const dataSource = {
       getRepository: vi.fn().mockReturnValue(commandRepository),
@@ -532,6 +586,7 @@ describe("CommandDispatcherService", () => {
       const commandRepository = {
         findOne: vi.fn().mockResolvedValue(command),
         save: vi.fn().mockImplementation(async (entity) => entity),
+        update: conditionalCommandUpdate(command),
       };
       const sessionRepository = {
         findOneBy: vi.fn().mockResolvedValue(command.session),
@@ -605,6 +660,7 @@ describe("CommandDispatcherService", () => {
     const commandRepository = {
       findOne: vi.fn().mockResolvedValue(command),
       save: vi.fn().mockImplementation(async (entity) => entity),
+      update: conditionalCommandUpdate(command),
     };
     const dataSource = {
       getRepository: vi.fn().mockReturnValue(commandRepository),
@@ -634,6 +690,7 @@ describe("CommandDispatcherService", () => {
     const commandRepository = {
       findOne: vi.fn().mockResolvedValue(command),
       save: vi.fn().mockImplementation(async (entity) => entity),
+      update: conditionalCommandUpdate(command),
     };
     const sessionRepository = {
       findOneBy: vi.fn().mockResolvedValue(command.session),
@@ -727,4 +784,18 @@ function createCommand(overrides: Partial<DeviceCommand> = {}): DeviceCommand {
     nextAttemptAt: null,
     ...overrides,
   } as unknown as DeviceCommand;
+}
+
+function conditionalCommandUpdate(command: DeviceCommand) {
+  return vi.fn().mockImplementation(async (criteria, values) => {
+    if (
+      criteria.commandId !== command.commandId ||
+      criteria.status !== DeviceCommandStatus.PENDING ||
+      command.status !== DeviceCommandStatus.PENDING
+    ) {
+      return { affected: 0 };
+    }
+    Object.assign(command, values);
+    return { affected: 1 };
+  });
 }

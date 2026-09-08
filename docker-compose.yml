@@ -43,6 +43,8 @@ services:
       PAYOS_MOCK_CHECKOUT_BASE_URL: http://localhost:4000
       PAYOS_RETURN_URL: http://localhost:4000/payments/payos/return
       PAYOS_CANCEL_URL: http://localhost:4000/payments/payos/cancel
+      PAYMENT_RESERVATION_TTL_MINUTES: 15
+      PAYMENT_REAPER_INTERVAL_MS: 60000
     ports:
       - "127.0.0.1:4000:4000"
     healthcheck:

@@ -189,6 +189,28 @@ export class PayosClient {
     }
   }
 
+  async cancelPaymentLink(orderCode: number): Promise<void> {
+    if (!Number.isSafeInteger(orderCode) || orderCode <= 0) {
+      throw new Error("PayOS order code must be a positive safe integer");
+    }
+    if (this.config.mode === "mock") {
+      return;
+    }
+
+    await axios.post(
+      `${PAYOS_PAYMENT_REQUEST_URL}/${orderCode}/cancel`,
+      undefined,
+      {
+        headers: {
+          "x-client-id": this.config.clientId,
+          "x-api-key": this.config.apiKey,
+          "content-type": "application/json",
+        },
+        timeout: this.config.requestTimeoutMs,
+      },
+    );
+  }
+
   verifyWebhook(data: Record<string, unknown>, signature: string): boolean {
     return verifyPayosSignature(data, signature, this.config.checksumKey);
   }

@@ -130,9 +130,15 @@ export class CommandDispatcherService
       }
       try {
         await this.send(commandPayload);
-        command.status = DeviceCommandStatus.SENT;
-        command.nextAttemptAt = null;
-        await commandRepository.save(command);
+        if (
+          await this.updatePendingCommand(commandRepository, command, {
+            status: DeviceCommandStatus.SENT,
+            nextAttemptAt: null,
+          })
+        ) {
+          command.status = DeviceCommandStatus.SENT;
+          command.nextAttemptAt = null;
+        }
         return;
       } catch (error: unknown) {
         if (error instanceof IotTransportError) {
@@ -146,9 +152,21 @@ export class CommandDispatcherService
           }
 
           const delayMs = RETRY_DELAYS_MS[command.retryCount];
-          command.retryCount += 1;
-          command.nextAttemptAt = new Date(Date.now() + delayMs);
-          await commandRepository.save(command);
+          const retryCount = command.retryCount + 1;
+          const nextAttemptAt = new Date(Date.now() + delayMs);
+          if (
+            !(
+              await this.updatePendingCommand(commandRepository, command, {
+                status: DeviceCommandStatus.PENDING,
+                retryCount,
+                nextAttemptAt,
+              })
+            )
+          ) {
+            return;
+          }
+          command.retryCount = retryCount;
+          command.nextAttemptAt = nextAttemptAt;
           await this.wait(delayMs);
           continue;
         }
@@ -200,9 +218,34 @@ export class CommandDispatcherService
     command: DeviceCommand,
     commandRepository: Repository<DeviceCommand>,
   ): Promise<void> {
-    command.status = DeviceCommandStatus.FAILED;
-    command.nextAttemptAt = null;
-    await commandRepository.save(command);
+    if (
+      await this.updatePendingCommand(commandRepository, command, {
+        status: DeviceCommandStatus.FAILED,
+        nextAttemptAt: null,
+      })
+    ) {
+      command.status = DeviceCommandStatus.FAILED;
+      command.nextAttemptAt = null;
+    }
+  }
+
+  private async updatePendingCommand(
+    commandRepository: Repository<DeviceCommand>,
+    command: DeviceCommand,
+    values: {
+      status: DeviceCommandStatus;
+      nextAttemptAt: Date | null;
+      retryCount?: number;
+    },
+  ): Promise<boolean> {
+    const result = await commandRepository.update(
+      {
+        commandId: command.commandId,
+        status: DeviceCommandStatus.PENDING,
+      },
+      values,
+    );
+    return result.affected === 1;
   }
 
   private async markPreDispatchFailure(
@@ -249,6 +292,16 @@ export class CommandDispatcherService
         return null;
       }
 
+      if (
+        !(
+          await this.updatePendingCommand(transactionalCommandRepository, command, {
+            status: DeviceCommandStatus.FAILED,
+            nextAttemptAt: null,
+          })
+        )
+      ) {
+        return null;
+      }
       command.status = DeviceCommandStatus.FAILED;
       command.nextAttemptAt = null;
       const shouldMarkStateUnknown =
@@ -259,7 +312,6 @@ export class CommandDispatcherService
         session.operationalWarning = "START_STATE_UNKNOWN";
       }
 
-      await transactionalCommandRepository.save(command);
       if (shouldMarkStateUnknown) {
         await sessionRepository.save(session);
       }
@@ -302,9 +354,18 @@ export class CommandDispatcherService
         return null;
       }
 
+      if (
+        !(
+          await this.updatePendingCommand(transactionalCommandRepository, command, {
+            status: DeviceCommandStatus.FAILED,
+            nextAttemptAt: null,
+          })
+        )
+      ) {
+        return null;
+      }
       command.status = DeviceCommandStatus.FAILED;
       command.nextAttemptAt = null;
-      await transactionalCommandRepository.save(command);
 
       if (
         session.status !== ChargingSessionStatus.PENDING &&

@@ -91,6 +91,253 @@ describe("PaymentsService webhook processing", () => {
     );
   });
 
+  it("persists a configured payment reservation expiry from the current clock", async () => {
+    const previousExpiryMinutes = process.env.PAYMENT_RESERVATION_TTL_MINUTES;
+    process.env.PAYMENT_RESERVATION_TTL_MINUTES = "5";
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-08T11:00:00.000Z"));
+    const connector = {
+      id: randomUUID(),
+      code: "ST01-C01",
+      status: "AVAILABLE",
+      pricingPlan: {
+        hourlyPriceVnd: 5000,
+        allowedDurationsMinutes: [60],
+      },
+    } as Connector;
+    let savedPayment: PaymentTransaction | undefined;
+    const connectorRepository = {
+      findOne: vi.fn().mockResolvedValue(connector),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const orderRepository = {
+      create: vi.fn().mockImplementation((entity) => ({
+        ...entity,
+        payosOrderCode: "100001",
+      })),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const paymentRepository = {
+      create: vi.fn().mockImplementation((entity) => entity),
+      findOneBy: vi.fn().mockImplementation(async () => savedPayment),
+      save: vi.fn().mockImplementation(async (entity) => {
+        savedPayment = entity;
+        return entity;
+      }),
+    };
+    const manager = {
+      query: vi.fn().mockImplementation(async (query: string) => {
+        if (query.includes("FROM connectors")) return [{ id: connector.id }];
+        if (query.includes("FROM payment_transactions")) {
+          return [{ id: savedPayment?.id }];
+        }
+        throw new Error("Unexpected lock query");
+      }),
+      getRepository: vi.fn((entity) => {
+        if (entity === Connector) return connectorRepository;
+        if (entity === Order) return orderRepository;
+        if (entity === PaymentTransaction) return paymentRepository;
+        throw new Error("Unexpected repository");
+      }),
+    };
+    const dataSource = {
+      transaction: vi.fn(async (callback) => callback(manager)),
+    };
+    const payosClient = {
+      returnUrl: "http://localhost:5173/charge/return",
+      cancelUrl: "http://localhost:5173/charge/cancel",
+      createPaymentLink: vi.fn().mockResolvedValue({
+        paymentLinkId: "pl_100001",
+        checkoutUrl: "http://localhost:4000/payments/payos/mock/100001",
+      }),
+    };
+    const service = new PaymentsService(
+      dataSource as unknown as DataSource,
+      payosClient as unknown as PayosClient,
+    );
+
+    try {
+      await service.createOrder({
+        connectorCode: connector.code,
+        durationMinutes: 60,
+      });
+
+      expect(
+        (savedPayment as PaymentTransaction & { expiresAt?: Date }).expiresAt,
+      ).toEqual(new Date("2026-09-08T11:05:00.000Z"));
+    } finally {
+      vi.useRealTimers();
+      if (previousExpiryMinutes === undefined) {
+        delete process.env.PAYMENT_RESERVATION_TTL_MINUTES;
+      } else {
+        process.env.PAYMENT_RESERVATION_TTL_MINUTES = previousExpiryMinutes;
+      }
+    }
+  });
+
+  it("expires a due reservation exactly once and releases its connector", async () => {
+    const now = new Date("2026-09-08T11:15:00.000Z");
+    const connector = {
+      id: randomUUID(),
+      code: "ST01-C01",
+      status: "OCCUPIED",
+    } as Connector;
+    const order = {
+      id: randomUUID(),
+      payosOrderCode: "100001",
+      status: OrderStatus.PENDING_PAYMENT,
+      connector,
+    } as Order;
+    const payment = {
+      id: randomUUID(),
+      order,
+      paymentLinkId: "pl_100001",
+      checkoutUrl: "https://pay.example/100001",
+      status: PaymentTransactionStatus.PENDING,
+      expiresAt: new Date("2026-09-08T11:14:59.999Z"),
+    } as PaymentTransaction;
+    const paymentRepository = {
+      find: vi.fn().mockResolvedValue([payment]),
+      findOne: vi.fn().mockResolvedValue(payment),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const orderRepository = {
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const connectorRepository = {
+      findOne: vi.fn().mockResolvedValue(connector),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const manager = {
+      query: vi.fn().mockImplementation(async (query: string) => {
+        if (query.includes("FROM payment_transactions")) {
+          return [{ id: payment.id }];
+        }
+        if (query.includes("FROM connectors")) return [{ id: connector.id }];
+        throw new Error("Unexpected lock query");
+      }),
+      getRepository: vi.fn((entity) => {
+        if (entity === PaymentTransaction) return paymentRepository;
+        if (entity === Order) return orderRepository;
+        if (entity === Connector) return connectorRepository;
+        throw new Error("Unexpected repository");
+      }),
+    };
+    const dataSource = {
+      getRepository: vi.fn((entity) => {
+        if (entity === PaymentTransaction) return paymentRepository;
+        throw new Error("Unexpected repository");
+      }),
+      transaction: vi.fn(async (callback) => callback(manager)),
+    };
+    const payosClient = {
+      cancelPaymentLink: vi.fn().mockResolvedValue(undefined),
+    };
+    const gateway = {
+      publishOrder: vi.fn(),
+    };
+    const service = new PaymentsService(
+      dataSource as unknown as DataSource,
+      payosClient as unknown as PayosClient,
+      undefined,
+      gateway as unknown as ChargeGateway,
+    );
+    const expiryService = service as unknown as {
+      expireDueReservations(now: Date): Promise<number>;
+    };
+
+    await expect(expiryService.expireDueReservations(now)).resolves.toBe(1);
+    expect(payment.status).toBe(PaymentTransactionStatus.EXPIRED);
+    expect(order.status).toBe(OrderStatus.EXPIRED);
+    expect(connector.status).toBe("AVAILABLE");
+    expect(payosClient.cancelPaymentLink).toHaveBeenCalledWith(100001);
+    expect(gateway.publishOrder).toHaveBeenCalledWith(order.id, "payment.updated", {
+      orderId: order.id,
+      status: OrderStatus.EXPIRED,
+    });
+
+    await expect(expiryService.expireDueReservations(now)).resolves.toBe(0);
+    expect(payosClient.cancelPaymentLink).toHaveBeenCalledOnce();
+    expect(gateway.publishOrder).toHaveBeenCalledOnce();
+  });
+
+  it("does not restore an expired reservation when initial link creation races the reaper", async () => {
+    const connector = {
+      id: randomUUID(),
+      code: "ST01-C01",
+      status: "AVAILABLE",
+      pricingPlan: {
+        hourlyPriceVnd: 5000,
+        allowedDurationsMinutes: [60],
+      },
+    } as Connector;
+    let savedPayment: PaymentTransaction | undefined;
+    const connectorRepository = {
+      findOne: vi.fn().mockResolvedValue(connector),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const orderRepository = {
+      create: vi.fn().mockImplementation((entity) => ({
+        ...entity,
+        payosOrderCode: "100001",
+      })),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+    };
+    const paymentRepository = {
+      create: vi.fn().mockImplementation((entity) => entity),
+      findOneBy: vi.fn().mockImplementation(async () => savedPayment),
+      save: vi.fn().mockImplementation(async (entity) => {
+        savedPayment = entity;
+        return entity;
+      }),
+    };
+    const manager = {
+      query: vi.fn().mockImplementation(async (query: string) => {
+        if (query.includes("FROM connectors")) return [{ id: connector.id }];
+        if (query.includes("FROM payment_transactions")) {
+          return [{ id: savedPayment?.id }];
+        }
+        throw new Error("Unexpected lock query");
+      }),
+      getRepository: vi.fn((entity) => {
+        if (entity === Connector) return connectorRepository;
+        if (entity === Order) return orderRepository;
+        if (entity === PaymentTransaction) return paymentRepository;
+        throw new Error("Unexpected repository");
+      }),
+    };
+    const dataSource = {
+      transaction: vi.fn(async (callback) => callback(manager)),
+    };
+    const payosClient = {
+      returnUrl: "http://localhost:5173/charge/return",
+      cancelUrl: "http://localhost:5173/charge/cancel",
+      cancelPaymentLink: vi.fn().mockResolvedValue(undefined),
+      createPaymentLink: vi.fn().mockImplementation(async () => {
+        if (!savedPayment) throw new Error("Payment reservation was not saved");
+        savedPayment.status = PaymentTransactionStatus.EXPIRED;
+        savedPayment.order.status = OrderStatus.EXPIRED;
+        connector.status = "AVAILABLE";
+        return {
+          paymentLinkId: "pl_100001",
+          checkoutUrl: "https://pay.example/100001",
+        };
+      }),
+    };
+    const service = new PaymentsService(
+      dataSource as unknown as DataSource,
+      payosClient as unknown as PayosClient,
+    );
+
+    await expect(
+      service.createOrder({ connectorCode: connector.code, durationMinutes: 60 }),
+    ).rejects.toThrow("Payment reservation is no longer pending");
+
+    expect(savedPayment?.status).toBe(PaymentTransactionStatus.EXPIRED);
+    expect(savedPayment?.checkoutUrl).toBeNull();
+    expect(payosClient.cancelPaymentLink).toHaveBeenCalledWith(100001);
+  });
+
   it("calls PayOS only after connector, order, and payment reservation commits", async () => {
     const connector = {
       id: randomUUID(),

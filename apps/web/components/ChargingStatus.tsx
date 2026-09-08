@@ -315,7 +315,9 @@ export function ChargingStatus({
     sessionId &&
     accessToken &&
     session &&
-    ["STARTING", "CHARGING", "STOPPING"].includes(session.status),
+    ["STARTING", "CHARGING", "STOPPING", "DEVICE_OFFLINE"].includes(
+      session.status,
+    ),
   );
   const canRetryStart = Boolean(
     sessionId && accessToken && session?.status === "START_FAILED",

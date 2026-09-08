@@ -89,6 +89,20 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
       station,
       pricingPlan,
     });
+    await dataSource.getRepository(Connector).save({
+      id: randomUUID(),
+      code: 'ST01-C04',
+      status: ConnectorStatus.AVAILABLE,
+      station,
+      pricingPlan,
+    });
+    await dataSource.getRepository(Connector).save({
+      id: randomUUID(),
+      code: 'ST01-C05',
+      status: ConnectorStatus.AVAILABLE,
+      station,
+      pricingPlan,
+    });
 
     payosClient = new PayosClient({
       mode: 'mock',
@@ -263,6 +277,66 @@ describe('PayOS payment concurrency with local PostgreSQL', () => {
           .findOneByOrFail({ code: 'ST01-C01' })
       ).status,
     ).toBe(ConnectorStatus.OCCUPIED);
+  });
+
+  it('expires one overdue reservation across concurrent PostgreSQL reaper passes', async () => {
+    const created = await paymentsService.createOrder({
+      connectorCode: 'ST01-C04',
+      durationMinutes: 60,
+    });
+    const payment = await dataSource
+      .getRepository(PaymentTransaction)
+      .findOneOrFail({
+        where: { order: { id: created.orderId } },
+        relations: { order: { connector: true } },
+      });
+    const now = new Date();
+    await dataSource.getRepository(PaymentTransaction).update(payment.id, {
+      expiresAt: new Date(now.valueOf() - 1),
+    });
+
+    const results = await Promise.all([
+      paymentsService.expireDueReservations(now),
+      paymentsService.expireDueReservations(now),
+    ]);
+
+    expect(results.reduce((total, count) => total + count, 0)).toBe(1);
+    const expired = await dataSource
+      .getRepository(PaymentTransaction)
+      .findOneOrFail({
+        where: { id: payment.id },
+        relations: { order: { connector: true } },
+      });
+    expect(expired.status).toBe(PaymentTransactionStatus.EXPIRED);
+    expect(expired.order.status).toBe(OrderStatus.EXPIRED);
+    expect(expired.order.connector.status).toBe(ConnectorStatus.AVAILABLE);
+  });
+
+  it('leaves a fresh persisted checkout pending during a reaper pass', async () => {
+    const created = await paymentsService.createOrder({
+      connectorCode: 'ST01-C05',
+      durationMinutes: 60,
+    });
+    const payment = await dataSource
+      .getRepository(PaymentTransaction)
+      .findOneOrFail({
+        where: { order: { id: created.orderId } },
+        relations: { order: { connector: true } },
+      });
+
+    await paymentsService.expireDueReservations(new Date());
+
+    const persisted = await dataSource
+      .getRepository(PaymentTransaction)
+      .findOneOrFail({
+        where: { id: payment.id },
+        relations: { order: { connector: true } },
+      });
+    expect(persisted.status).toBe(PaymentTransactionStatus.PENDING);
+    expect(persisted.checkoutUrl).toEqual(expect.any(String));
+    expect(persisted.expiresAt.valueOf()).toBeGreaterThan(Date.now());
+    expect(persisted.order.status).toBe(OrderStatus.PENDING_PAYMENT);
+    expect(persisted.order.connector.status).toBe(ConnectorStatus.OCCUPIED);
   });
 
   it('creates one charging session and command for concurrent duplicate paid webhooks', async () => {

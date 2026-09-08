@@ -8,7 +8,7 @@ export type DeviceRuntimeStatus = "STARTING" | "RUNNING" | "STOPPED";
 export type RelayState = "ON" | "OFF";
 export type CommandResponseStatus = "ACCEPTED" | "REJECTED" | "STOPPED";
 
-export interface PendingTerminalDelivery {
+export interface PendingCriticalDelivery {
   event: DeviceEvent;
   retryCount: number;
   retryTimer?: ReturnType<typeof setTimeout>;
@@ -25,7 +25,7 @@ export interface DeviceRuntimeState {
   heartbeatTimer?: ReturnType<typeof setInterval>;
   stopTimer?: ReturnType<typeof setTimeout>;
   stoppedEventSent: boolean;
-  terminalDeliveries: Map<string, PendingTerminalDelivery>;
+  criticalDeliveries: Map<string, PendingCriticalDelivery>;
 }
 
 export interface CommandResponse {
@@ -69,7 +69,7 @@ export class DeviceStateService implements OnModuleDestroy {
       status: "STARTING",
       relayState: "OFF",
       stoppedEventSent: false,
-      terminalDeliveries: new Map(),
+      criticalDeliveries: new Map(),
     };
     this.commands.set(command.commandId, state);
     this.connectors.set(command.connectorCode, state);
@@ -80,45 +80,45 @@ export class DeviceStateService implements OnModuleDestroy {
     this.stopResponses.set(commandId, response);
   }
 
-  createTerminalDelivery(
+  createCriticalDelivery(
     state: DeviceRuntimeState,
     event: DeviceEvent,
-  ): PendingTerminalDelivery {
-    const existing = state.terminalDeliveries.get(event.eventId);
+  ): PendingCriticalDelivery {
+    const existing = state.criticalDeliveries.get(event.eventId);
     if (existing) {
       return existing;
     }
 
-    const delivery: PendingTerminalDelivery = {
+    const delivery: PendingCriticalDelivery = {
       event,
       retryCount: 0,
     };
-    state.terminalDeliveries.set(event.eventId, delivery);
+    state.criticalDeliveries.set(event.eventId, delivery);
     return delivery;
   }
 
-  getTerminalDelivery(
+  getCriticalDelivery(
     state: DeviceRuntimeState,
     eventId: string,
-  ): PendingTerminalDelivery | undefined {
-    return state.terminalDeliveries.get(eventId);
+  ): PendingCriticalDelivery | undefined {
+    return state.criticalDeliveries.get(eventId);
   }
 
-  acknowledgeTerminalDelivery(
+  acknowledgeCriticalDelivery(
     state: DeviceRuntimeState,
     eventId: string,
   ): void {
-    const delivery = state.terminalDeliveries.get(eventId);
+    const delivery = state.criticalDeliveries.get(eventId);
     if (!delivery) {
       return;
     }
 
-    this.cancelTerminalRetry(delivery);
-    state.terminalDeliveries.delete(eventId);
+    this.cancelCriticalRetry(delivery);
+    state.criticalDeliveries.delete(eventId);
   }
 
-  waitForTerminalRetry(
-    delivery: PendingTerminalDelivery,
+  waitForCriticalRetry(
+    delivery: PendingCriticalDelivery,
     delayMs: number,
   ): Promise<void> {
     delivery.retryCount += 1;
@@ -170,16 +170,16 @@ export class DeviceStateService implements OnModuleDestroy {
   onModuleDestroy(): void {
     for (const state of this.commands.values()) {
       this.clearTimers(state);
-      for (const delivery of state.terminalDeliveries.values()) {
-        this.cancelTerminalRetry(delivery);
+      for (const delivery of state.criticalDeliveries.values()) {
+        this.cancelCriticalRetry(delivery);
       }
-      state.terminalDeliveries.clear();
+      state.criticalDeliveries.clear();
     }
     this.connectors.clear();
     this.stopResponses.clear();
   }
 
-  private cancelTerminalRetry(delivery: PendingTerminalDelivery): void {
+  private cancelCriticalRetry(delivery: PendingCriticalDelivery): void {
     delivery.retryResolver?.();
   }
 }

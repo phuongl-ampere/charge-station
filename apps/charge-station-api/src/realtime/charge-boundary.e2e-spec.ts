@@ -253,7 +253,7 @@ describe("charge capability boundary", () => {
     }
   });
 
-  it("completes payment, authorizes session access and stop, and rejoins both rooms after reconnect", async () => {
+  it("completes payment, authorizes an offline session stop, and rejoins both rooms after reconnect", async () => {
     const created = await request(app.getHttpServer())
       .post("/orders")
       .send({ connectorCode: "ST01-C01", durationMinutes: 180 })
@@ -335,7 +335,7 @@ describe("charge capability boundary", () => {
     });
     await dataSource
       .getRepository(ChargingSession)
-      .update(sessionId, { status: ChargingSessionStatus.STARTING });
+      .update(sessionId, { status: ChargingSessionStatus.DEVICE_OFFLINE });
 
     await request(app.getHttpServer())
       .post(`/sessions/${sessionId}/stop`)

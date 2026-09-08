@@ -153,6 +153,43 @@ describe("CommandsService", () => {
     expect(stoppedEvents[1].eventId).toBe(firstStopped?.eventId);
   });
 
+  it("retries lost initial ACK and RUNNING callbacks in session order", async () => {
+    const attemptsByType = new Map<string, number>();
+    const deliveredEvents: Array<Record<string, unknown>> = [];
+    eventClient.post.mockImplementation(async (event) => {
+      deliveredEvents.push(event as Record<string, unknown>);
+      const attempts = (attemptsByType.get(event.type) ?? 0) + 1;
+      attemptsByType.set(event.type, attempts);
+      if (
+        (event.type === "COMMAND_ACCEPTED" || event.type === "RUNNING") &&
+        attempts === 1
+      ) {
+        throw new Error(`lost ${event.type} callback`);
+      }
+    });
+
+    await service.start(commandWithDuration(5));
+    await vi.advanceTimersByTimeAsync(300);
+
+    const initialEvents = deliveredEvents.filter(
+      (event) =>
+        event.type === "COMMAND_ACCEPTED" || event.type === "RUNNING",
+    );
+    expect(initialEvents.map((event) => event.type)).toEqual([
+      "COMMAND_ACCEPTED",
+      "COMMAND_ACCEPTED",
+      "RUNNING",
+      "RUNNING",
+    ]);
+    expect(initialEvents[1]).toEqual(initialEvents[0]);
+    expect(initialEvents[3]).toEqual(initialEvents[2]);
+
+    await expect(service.stop(stopCommand())).resolves.toMatchObject({
+      accepted: true,
+      status: "STOPPED",
+    });
+  });
+
   it.each([
     ["command_failed", "COMMAND_FAILED"],
     ["offline", "DEVICE_OFFLINE"],

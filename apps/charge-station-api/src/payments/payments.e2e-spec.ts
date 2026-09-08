@@ -32,6 +32,7 @@ import {
   Station,
 } from '../database/data-source.js';
 import { PayosClient, type PayosWebhookData } from './payos.client.js';
+import { ChargeGateway } from '../realtime/charge.gateway.js';
 import { PaymentsController } from './payments.controller.js';
 import { PaymentsService } from './payments.service.js';
 
@@ -39,6 +40,11 @@ describe('PayOS payment API', () => {
   let app: INestApplication;
   let dataSource: DataSource;
   let payosClient: PayosClient;
+  const chargeGateway = {
+    issueAccessToken: vi.fn((orderId: string) => `capability-${orderId}`),
+    publishOrder: vi.fn(),
+    publishSession: vi.fn(),
+  };
 
   beforeAll(async () => {
     vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
@@ -96,6 +102,7 @@ describe('PayOS payment API', () => {
         PaymentsService,
         { provide: PayosClient, useValue: payosClient },
         { provide: getDataSourceToken(), useValue: dataSource },
+        { provide: ChargeGateway, useValue: chargeGateway },
       ],
     }).compile();
 
@@ -205,6 +212,51 @@ describe('PayOS payment API', () => {
       ).status,
     ).toBe(ConnectorStatus.AVAILABLE);
     await createOrder();
+  });
+
+  it('expires an abandoned local checkout and releases its connector', async () => {
+    const created = await createOrder();
+    const payment = await dataSource
+      .getRepository(PaymentTransaction)
+      .findOneOrFail({
+        where: { order: { id: created.body.orderId } },
+        relations: { order: true },
+      });
+    await dataSource.getRepository(PaymentTransaction).update(payment.id, {
+      expiresAt: new Date(Date.now() - 1),
+    });
+    const paymentsService = app.get(PaymentsService);
+
+    await expect(paymentsService.expireDueReservations()).resolves.toBe(1);
+
+    const checkoutPath = new URL(created.body.payment.checkoutUrl).pathname;
+    await request(app.getHttpServer())
+      .get(checkoutPath)
+      .expect('Content-Type', /text\/html/)
+      .expect(/Payment status: EXPIRED/)
+      .expect(200);
+    await request(app.getHttpServer())
+      .post(`${checkoutPath}/complete`)
+      .expect(201);
+
+    expect(
+      (
+        await dataSource
+          .getRepository(PaymentTransaction)
+          .findOneByOrFail({ id: payment.id })
+      ).status,
+    ).toBe(PaymentTransactionStatus.EXPIRED);
+    expect(
+      (await dataSource.getRepository(Order).findOneByOrFail({ id: payment.order.id }))
+        .status,
+    ).toBe(OrderStatus.EXPIRED);
+    expect(
+      (
+        await dataSource
+          .getRepository(Connector)
+          .findOneByOrFail({ code: 'ST01-C01' })
+      ).status,
+    ).toBe(ConnectorStatus.AVAILABLE);
   });
 
   it('marks a signed paid webhook once and creates one session and start command', async () => {
@@ -394,16 +446,24 @@ describe('PayOS payment API', () => {
     const callbackData = { orderCode: Number(order.payosOrderCode) };
     const signature = payosClient.signWebhook(callbackData);
 
-    await request(app.getHttpServer())
+    const returnResponse = await request(app.getHttpServer())
       .get('/payments/payos/return')
       .query({ ...callbackData, signature })
-      .expect('Location', `http://localhost:5173/charge/${order.id}`)
       .expect(302);
-    await request(app.getHttpServer())
+    const cancelResponse = await request(app.getHttpServer())
       .get('/payments/payos/cancel')
       .query({ ...callbackData, signature })
-      .expect('Location', `http://localhost:5173/charge/${order.id}`)
       .expect(302);
+    for (const response of [returnResponse, cancelResponse]) {
+      const redirect = new URL(response.headers.location);
+      expect(redirect.origin).toBe('http://localhost:5173');
+      expect(redirect.pathname).toBe(`/charge/${order.id}`);
+      expect(redirect.search).toBe('');
+      expect(
+        new URLSearchParams(redirect.hash.slice(1)).get('charge_access'),
+      ).toBe(`capability-${order.id}`);
+    }
+    expect(chargeGateway.issueAccessToken).toHaveBeenCalledWith(order.id);
     await request(app.getHttpServer())
       .get('/payments/payos/return')
       .query({ ...callbackData, signature: 'invalid' })

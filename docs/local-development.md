@@ -51,11 +51,15 @@ PAYOS_MODE=mock
 PAYOS_MOCK_CHECKOUT_BASE_URL=http://localhost:4000
 PAYOS_CHECKSUM_KEY=local-checksum-key
 MOCK_IOT_FAILURE_MODE=none
+PAYMENT_RESERVATION_TTL_MINUTES=15
+PAYMENT_REAPER_INTERVAL_MS=60000
 ```
 
 The mock IoT service accepts `MOCK_IOT_FAILURE_MODE=timeout`, `offline`, or `command_failed` to exercise command failure paths. `MOCK_IOT_START_DELAY_MS` and `MOCK_IOT_HEARTBEAT_MS` control the mock timing. Change an environment value in `docker-compose.yml`, then recreate the affected service.
 
-`STOPPED`, `COMMAND_FAILED`, and `DEVICE_OFFLINE` callbacks retain their original event ID and retry after 100 ms, 500 ms, then a capped 1 second interval until the API acknowledges them. The mock clears retry timers on shutdown. Nonterminal callbacks remain best effort.
+`COMMAND_ACCEPTED`, `RUNNING`, `STOPPED`, `COMMAND_FAILED`, and `DEVICE_OFFLINE` callbacks retain their original event ID and payload, retry after 100 ms, 500 ms, then a capped 1 second interval until the API acknowledges them, and preserve delivery order within a session. The mock clears retry timers on shutdown. Heartbeats remain best effort.
+
+`PAYMENT_RESERVATION_TTL_MINUTES` controls how long a newly created pending payment reserves its connector. The API starts a non-blocking reaper after its listener is ready; it expires overdue pending reservations, releases their connector, and attempts to cancel the provider link. `PAYMENT_REAPER_INTERVAL_MS` controls its scan interval.
 
 ## Signed Mock Webhook
 
@@ -90,6 +94,11 @@ Creating an order first commits the connector reservation, order, and pending
 payment transaction. PayOS payment-link creation then occurs outside the
 database transaction, followed by a short transaction that stores the link.
 This avoids holding a database lock while calling PayOS.
+
+If a reservation expires while link creation is in flight, the link is not
+persisted or returned to the browser, and the API attempts to cancel it at
+PayOS. A local mock checkout for an expired payment shows its final status and
+cannot complete the payment.
 
 If PayOS accepts a link but its first database update fails, the order remains
 recoverable. Use the returned order capability token with:
@@ -146,6 +155,11 @@ PAYOS_CANCEL_URL=https://<public-api-host>/payments/payos/cancel
 
 These URLs cannot be `localhost`: PayOS must reach them from the public internet. The webhook is the only callback that can activate charging, after signature, order-code, and amount verification. Return and cancel callbacks are browser redirects only and cannot change payment or charging state.
 
+After validating a signed return or cancel callback, the API redirects to the
+charge page with a short-lived order capability in the URL fragment. The web
+page stores it in same-tab `sessionStorage` and immediately removes the
+fragment, so the capability is not placed in a query string or referrer.
+
 ## Verification
 
 ```sh
@@ -153,6 +167,8 @@ docker compose up -d --wait
 pnpm test
 pnpm build
 pnpm --filter @charge-station/api test:e2e
+pnpm --filter @charge-station/api test:postgres
+pnpm --filter @charge-station/iot-service test:e2e
 pnpm --filter @charge-station/web playwright test
 docker compose down
 ```

@@ -11,9 +11,25 @@ export default function ChargeOrderPage() {
   const [accessToken, setAccessToken] = useState<string | undefined>();
 
   useEffect(() => {
-    setAccessToken(
-      window.sessionStorage.getItem(`charge-token:${orderId}`) ?? undefined,
+    const storageKey = `charge-token:${orderId}`;
+    const hash = window.location.hash;
+    const returnCapability = new URLSearchParams(hash.slice(1)).get(
+      "charge_access",
     );
+    if (hash) {
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${window.location.pathname}${window.location.search}`,
+      );
+    }
+    if (returnCapability) {
+      window.sessionStorage.setItem(storageKey, returnCapability);
+      setAccessToken(returnCapability);
+      return;
+    }
+
+    setAccessToken(window.sessionStorage.getItem(storageKey) ?? undefined);
   }, [orderId]);
 
   return <ChargingStatus orderId={orderId} accessToken={accessToken} />;

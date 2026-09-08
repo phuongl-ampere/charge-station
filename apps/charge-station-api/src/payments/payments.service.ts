@@ -4,12 +4,13 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
   Optional,
 } from "@nestjs/common";
 import { InjectDataSource } from "@nestjs/typeorm";
-import { DataSource, EntityManager } from "typeorm";
+import { DataSource, EntityManager, LessThanOrEqual } from "typeorm";
 
 import {
   ChargingSession,
@@ -54,6 +55,16 @@ interface CreateOrderResult {
   realtimeAccessToken?: string;
 }
 
+type PaymentLinkPersistenceResult =
+  | { persisted: true }
+  | {
+      persisted: false;
+      paymentStatus: PaymentTransactionStatus | undefined;
+      reservationExpired: boolean;
+    };
+
+const DEFAULT_PAYMENT_RESERVATION_TTL_MINUTES = 15;
+
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
@@ -90,8 +101,12 @@ export class PaymentsService {
         payment: { provider: "PAYOS", paymentPending: true },
       });
     }
+    let persistence: PaymentLinkPersistenceResult | undefined;
     try {
-      await this.persistPaymentLink(reservation.paymentId, paymentLink);
+      persistence = await this.persistPaymentLink(
+        reservation.paymentId,
+        paymentLink,
+      );
     } catch (error: unknown) {
       const details =
         error instanceof Error ? (error.stack ?? error.message) : String(error);
@@ -99,6 +114,24 @@ export class PaymentsService {
         "Failed to persist PayOS payment link; recovery is required",
         details,
       );
+    }
+    if (persistence && !persistence.persisted) {
+      if (persistence.reservationExpired) {
+        const expired = await this.expireReservation(
+          reservation.paymentId,
+          new Date(),
+        );
+        if (expired) {
+          await this.cancelExpiredPaymentLink(expired.orderCode);
+          this.gateway?.publishOrder(expired.orderId, "payment.updated", {
+            orderId: expired.orderId,
+            status: OrderStatus.EXPIRED,
+          });
+        }
+      } else if (persistence.paymentStatus === PaymentTransactionStatus.EXPIRED) {
+        await this.cancelExpiredPaymentLink(reservation.orderCode);
+      }
+      throw new BadRequestException("Payment reservation is no longer pending");
     }
 
     return this.withRealtimeAccessToken({
@@ -136,6 +169,34 @@ export class PaymentsService {
     return paymentLink
       ? { provider: "PAYOS", checkoutUrl: paymentLink.checkoutUrl }
       : { provider: "PAYOS", paymentPending: true };
+  }
+
+  async expireDueReservations(now = new Date()): Promise<number> {
+    const duePayments = await this.dataSource
+      .getRepository(PaymentTransaction)
+      .find({
+        where: {
+          status: PaymentTransactionStatus.PENDING,
+          expiresAt: LessThanOrEqual(now),
+        },
+      });
+    let expiredCount = 0;
+
+    for (const payment of duePayments) {
+      const expired = await this.expireReservation(payment.id, now);
+      if (!expired) {
+        continue;
+      }
+
+      expiredCount += 1;
+      await this.cancelExpiredPaymentLink(expired.orderCode);
+      this.gateway?.publishOrder(expired.orderId, "payment.updated", {
+        orderId: expired.orderId,
+        status: OrderStatus.EXPIRED,
+      });
+    }
+
+    return expiredCount;
   }
 
   private async createPaymentLink(
@@ -187,7 +248,10 @@ export class PaymentsService {
     }
 
     try {
-      await this.persistPaymentLink(paymentId, paymentLink);
+      const persistence = await this.persistPaymentLink(paymentId, paymentLink);
+      if (!persistence.persisted) {
+        return null;
+      }
     } catch (error: unknown) {
       const details =
         error instanceof Error ? (error.stack ?? error.message) : String(error);
@@ -287,6 +351,7 @@ export class PaymentsService {
           paymentLinkId: null,
           checkoutUrl: null,
           status: PaymentTransactionStatus.PENDING,
+          expiresAt: paymentReservationExpiry(new Date()),
           rawWebhookPayload: null,
           signatureValid: false,
         }),
@@ -305,6 +370,66 @@ export class PaymentsService {
         ),
       };
     });
+  }
+
+  private async expireReservation(
+    paymentId: string,
+    now: Date,
+  ): Promise<{ orderId: string; orderCode: number } | null> {
+    return this.dataSource.transaction(async (manager) => {
+      const paymentRepository = manager.getRepository(PaymentTransaction);
+      const orderRepository = manager.getRepository(Order);
+      const connectorRepository = manager.getRepository(Connector);
+      const lockedPaymentId = await lockPaymentIdById(manager, paymentId);
+      const payment = lockedPaymentId
+        ? await paymentRepository.findOne({
+            where: { id: lockedPaymentId },
+            relations: { order: { connector: true } },
+          })
+        : null;
+      if (
+        !payment ||
+        payment.status !== PaymentTransactionStatus.PENDING ||
+        payment.order.status !== OrderStatus.PENDING_PAYMENT ||
+        !payment.expiresAt ||
+        payment.expiresAt.valueOf() > now.valueOf()
+      ) {
+        return null;
+      }
+
+      const connectorId = await lockConnectorIdById(
+        manager,
+        payment.order.connector.id,
+      );
+      const connector = connectorId
+        ? await connectorRepository.findOne({ where: { id: connectorId } })
+        : null;
+      if (!connector) {
+        throw new NotFoundException("Connector not found");
+      }
+
+      payment.status = PaymentTransactionStatus.EXPIRED;
+      payment.order.status = OrderStatus.EXPIRED;
+      connector.status = ConnectorStatus.AVAILABLE;
+      await orderRepository.save(payment.order);
+      await paymentRepository.save(payment);
+      await connectorRepository.save(connector);
+      return {
+        orderId: payment.order.id,
+        orderCode: parsePositiveOrderCode(payment.order.payosOrderCode),
+      };
+    });
+  }
+
+  private async cancelExpiredPaymentLink(orderCode: number): Promise<void> {
+    try {
+      await this.payosClient.cancelPaymentLink(orderCode);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Unable to cancel expired PayOS payment link ${orderCode}: ${message}`,
+      );
+    }
   }
 
   private async failPaymentLinkReservation(paymentId: string): Promise<void> {
@@ -352,8 +477,8 @@ export class PaymentsService {
   private async persistPaymentLink(
     paymentId: string,
     paymentLink: PaymentLink,
-  ): Promise<void> {
-    await this.dataSource.transaction(async (manager) => {
+  ): Promise<PaymentLinkPersistenceResult> {
+    return this.dataSource.transaction(async (manager) => {
       const lockedPaymentId = await lockPaymentIdById(manager, paymentId);
       const payment = lockedPaymentId
         ? await manager
@@ -363,13 +488,31 @@ export class PaymentsService {
       if (!payment) {
         throw new NotFoundException("Payment not found");
       }
+      if (
+        payment.status !== undefined &&
+        payment.status !== PaymentTransactionStatus.PENDING
+      ) {
+        return {
+          persisted: false,
+          paymentStatus: payment.status,
+          reservationExpired: false,
+        };
+      }
+      if (payment.expiresAt && payment.expiresAt.valueOf() <= Date.now()) {
+        return {
+          persisted: false,
+          paymentStatus: payment.status,
+          reservationExpired: true,
+        };
+      }
       if (payment.checkoutUrl) {
-        return;
+        return { persisted: true };
       }
 
       payment.paymentLinkId = paymentLink.paymentLinkId;
       payment.checkoutUrl = paymentLink.checkoutUrl;
       await manager.getRepository(PaymentTransaction).save(payment);
+      return { persisted: true };
     });
   }
 
@@ -562,7 +705,22 @@ export class PaymentsService {
       throw new NotFoundException("PayOS order not found");
     }
 
-    return `${(process.env.FRONTEND_URL ?? "http://localhost:5173").replace(/\/$/, "")}/charge/${order.id}`;
+    if (!this.gateway) {
+      throw new InternalServerErrorException(
+        "Charge access capability issuer is unavailable",
+      );
+    }
+    const frontendUrl = new URL(
+      process.env.FRONTEND_URL ?? "http://localhost:5173",
+    );
+    const redirect = new URL(
+      `/charge/${encodeURIComponent(order.id)}`,
+      frontendUrl,
+    );
+    redirect.hash = new URLSearchParams({
+      charge_access: this.gateway.issueAccessToken(order.id),
+    }).toString();
+    return redirect.toString();
   }
 
   private async handleMockCheckout(
@@ -689,6 +847,21 @@ function parsePositiveOrderCode(value: unknown): number {
     throw new BadRequestException("PayOS order code must be a positive number");
   }
   return orderCode;
+}
+
+function paymentReservationExpiry(now: Date): Date {
+  return new Date(
+    now.valueOf() + paymentReservationTtlMinutes() * 60_000,
+  );
+}
+
+function paymentReservationTtlMinutes(): number {
+  const configuredMinutes = Number(
+    process.env.PAYMENT_RESERVATION_TTL_MINUTES,
+  );
+  return Number.isFinite(configuredMinutes) && configuredMinutes > 0
+    ? configuredMinutes
+    : DEFAULT_PAYMENT_RESERVATION_TTL_MINUTES;
 }
 
 function parsePositiveAmount(value: unknown): number {

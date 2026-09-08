@@ -10,7 +10,7 @@ import {
   type CommandResponse,
   DeviceStateService,
   type DeviceRuntimeState,
-  type PendingTerminalDelivery,
+  type PendingCriticalDelivery,
 } from "../devices/device-state.service.js";
 import { ChargeStationEventClient } from "../events/charge-station-event.client.js";
 
@@ -22,12 +22,14 @@ type StopReason =
   | "COMMAND_FAILED"
   | "DEVICE_OFFLINE";
 
-const TERMINAL_EVENT_TYPES = new Set<DeviceEvent["type"]>([
+const STATE_CRITICAL_EVENT_TYPES = new Set<DeviceEvent["type"]>([
+  "COMMAND_ACCEPTED",
+  "RUNNING",
   "DEVICE_OFFLINE",
   "COMMAND_FAILED",
   "STOPPED",
 ]);
-const TERMINAL_RETRY_DELAYS_MS = [100, 500, 1_000] as const;
+const CRITICAL_RETRY_DELAYS_MS = [100, 500, 1_000] as const;
 
 @Injectable()
 export class CommandsService {
@@ -213,10 +215,10 @@ export class CommandsService {
       payload,
     };
 
-    if (TERMINAL_EVENT_TYPES.has(type)) {
-      const delivery = this.deviceState.createTerminalDelivery(state, event);
+    if (STATE_CRITICAL_EVENT_TYPES.has(type)) {
+      const delivery = this.deviceState.createCriticalDelivery(state, event);
       this.enqueueEvent(event.sessionId, () =>
-        this.deliverTerminalEvent(state, delivery),
+        this.deliverCriticalEvent(state, delivery),
       );
       return;
     }
@@ -250,34 +252,34 @@ export class CommandsService {
     );
   }
 
-  private async deliverTerminalEvent(
+  private async deliverCriticalEvent(
     state: DeviceRuntimeState,
-    delivery: PendingTerminalDelivery,
+    delivery: PendingCriticalDelivery,
   ): Promise<void> {
     while (
-      this.deviceState.getTerminalDelivery(state, delivery.event.eventId) ===
+      this.deviceState.getCriticalDelivery(state, delivery.event.eventId) ===
       delivery
     ) {
       try {
         await this.eventClient.post(delivery.event);
-        this.deviceState.acknowledgeTerminalDelivery(
+        this.deviceState.acknowledgeCriticalDelivery(
           state,
           delivery.event.eventId,
         );
         return;
       } catch (error: unknown) {
         this.logEventDeliveryFailure(delivery.event, error);
-        await this.deviceState.waitForTerminalRetry(
+        await this.deviceState.waitForCriticalRetry(
           delivery,
-          this.terminalRetryDelay(delivery.retryCount),
+          this.criticalRetryDelay(delivery.retryCount),
         );
       }
     }
   }
 
-  private terminalRetryDelay(retryCount: number): number {
-    return TERMINAL_RETRY_DELAYS_MS[
-      Math.min(retryCount, TERMINAL_RETRY_DELAYS_MS.length - 1)
+  private criticalRetryDelay(retryCount: number): number {
+    return CRITICAL_RETRY_DELAYS_MS[
+      Math.min(retryCount, CRITICAL_RETRY_DELAYS_MS.length - 1)
     ];
   }
 

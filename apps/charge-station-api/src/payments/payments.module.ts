@@ -11,6 +11,7 @@ import {
 import { IotModule } from "../iot/iot.module.js";
 import { RealtimeModule } from "../realtime/realtime.module.js";
 import { PayosClient } from "./payos.client.js";
+import { PaymentExpirationService } from "./payment-expiration.service.js";
 import { PaymentsController } from "./payments.controller.js";
 import { PaymentsService } from "./payments.service.js";
 
@@ -27,7 +28,7 @@ import { PaymentsService } from "./payments.service.js";
     ]),
   ],
   controllers: [PaymentsController],
-  providers: [PaymentsService, PayosClient],
+  providers: [PaymentsService, PaymentExpirationService, PayosClient],
   exports: [PaymentsService],
 })
 export class PaymentsModule {}
