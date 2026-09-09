@@ -8,11 +8,11 @@ Local EV charging checkout with a mock PayOS payment flow and a separate mock Io
 docker compose up -d --wait
 ```
 
-Open `http://localhost:3000/scan/ST01-C01`. The local mock checkout is served by the API and requires no PayOS account or external request.
+Open `http://localhost:3100/scan/ST01-C01`. The local mock checkout is served by the API and requires no PayOS account or external request.
 
 | Service            | Local URL                                                |
 | ------------------ | -------------------------------------------------------- |
-| Web                | `http://localhost:3000`                                  |
+| Web                | `http://localhost:3100`                                  |
 | Charge Station API | `http://localhost:4000`                                  |
 | API health         | `http://localhost:4000/health`                           |
 | IoT health         | Compose network only: `http://iot-service:4001/health`   |

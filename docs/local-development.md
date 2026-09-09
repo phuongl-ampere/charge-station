@@ -17,7 +17,7 @@ The API waits for PostgreSQL, runs its TypeORM migrations and idempotent demo se
 
 | Service            | URL or network name                                      |
 | ------------------ | -------------------------------------------------------- |
-| Web                | `http://localhost:3000`                                  |
+| Web                | `http://localhost:3100`                                  |
 | Charge Station API | `http://localhost:4000`                                  |
 | API health         | `http://localhost:4000/health`                           |
 | IoT Service        | `http://iot-service:4001` inside Compose                 |
@@ -26,7 +26,7 @@ The API waits for PostgreSQL, runs its TypeORM migrations and idempotent demo se
 
 The API calls IoT at `http://iot-service:4001`; IoT posts device events to `http://charge-station-api:4000`. The web build uses `http://localhost:4000`, because that URL is resolved by the browser, not by the container.
 
-Open `http://localhost:3000/scan/ST01-C01` to create a local order. With `PAYOS_MODE=mock`, checkout is an API-hosted local page and no external PayOS request is made.
+Open `http://localhost:3100/scan/ST01-C01` to create a local order. With `PAYOS_MODE=mock`, checkout is an API-hosted local page and no external PayOS request is made.
 
 Stop the stack:
 
