@@ -8,8 +8,11 @@
     "start": "node dist/main.js",
     "start:dev": "tsx watch src/main.ts",
     "db:seed": "pnpm build && node dist/database/seed.js",
+    "pretest": "pnpm --filter @charge-station/contracts build",
     "test": "vitest run",
+    "pretest:e2e": "pnpm --filter @charge-station/contracts build",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "pretest:postgres": "pnpm --filter @charge-station/contracts build",
     "test:postgres": "vitest run --config vitest.postgres.config.ts",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
