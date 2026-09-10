@@ -1,6 +1,8 @@
 import "reflect-metadata";
+import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
+import type { Repository } from "typeorm";
 
 import {
   appDataSource,
@@ -8,6 +10,8 @@ import {
   ConnectorStatus,
   PricingPlan,
   Station,
+  User,
+  UserRole,
 } from "./data-source.js";
 
 export async function seedDatabase(dataSource = appDataSource): Promise<void> {
@@ -22,6 +26,7 @@ export async function seedDatabase(dataSource = appDataSource): Promise<void> {
     const stationRepository = dataSource.getRepository(Station);
     const pricingRepository = dataSource.getRepository(PricingPlan);
     const connectorRepository = dataSource.getRepository(Connector);
+    const userRepository = dataSource.getRepository(User);
 
     let station = await stationRepository.findOneBy({ code: "ST01" });
     if (!station) {
@@ -61,11 +66,37 @@ export async function seedDatabase(dataSource = appDataSource): Promise<void> {
         }),
       );
     }
+
+    await seedOperationsAdmin(userRepository);
   } finally {
     if (shouldClose) {
       await dataSource.destroy();
     }
   }
+}
+
+async function seedOperationsAdmin(
+  userRepository: Repository<User>,
+): Promise<void> {
+  const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+  const password = process.env.ADMIN_PASSWORD;
+  if (!email || !password) {
+    return;
+  }
+
+  const existing = await userRepository.findOneBy({ email });
+  if (existing) {
+    return;
+  }
+
+  await userRepository.save(
+    userRepository.create({
+      id: randomUUID(),
+      email,
+      passwordHash: await bcrypt.hash(password, 12),
+      role: UserRole.ADMIN,
+    }),
+  );
 }
 
 export function isSeedEntrypoint(entrypoint: string | undefined): boolean {

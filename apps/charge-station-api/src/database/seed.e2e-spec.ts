@@ -65,7 +65,7 @@ describe("database seed lifecycle", () => {
       .findOneBy({ code: "ST01-C01" });
     const migrations = await dataSource.query('SELECT * FROM "migrations"');
 
-    expect(migrations).toHaveLength(7);
+    expect(migrations).toHaveLength(8);
     expect(station).toMatchObject({
       code: "ST01",
       name: "Demo Station",

@@ -231,6 +231,51 @@ test("selects a duration, opens local PayOS checkout, and shows payment waiting"
   });
 });
 
+test("uses an encrypted station QR URL to choose a connector without exposing station code", async ({
+  page,
+}) => {
+  await page.context().route("http://localhost:4000/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (
+      route.request().method() === "GET" &&
+      url.pathname === "/public/stations/scan/ciphertext-token"
+    ) {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          stationName: "Riverside Station",
+          connectors: [
+            {
+              connectorCode: "ST01-C01",
+              status: "AVAILABLE",
+              allowedDurationsMinutes: [60, 120],
+              hourlyPriceVnd: 5000,
+            },
+            {
+              connectorCode: "ST01-C02",
+              status: "OFFLINE",
+              allowedDurationsMinutes: [60, 120],
+              hourlyPriceVnd: 5000,
+            },
+          ],
+        }),
+      });
+      return;
+    }
+    await route.fulfill({ status: 404, body: "mock route not found" });
+  });
+
+  await page.goto("/scan/station/ciphertext-token");
+
+  await expect(
+    page.getByRole("heading", { name: "Riverside Station" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "ST01-C01" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ST01-C02" })).toBeDisabled();
+  expect(page.url()).toContain("/scan/station/ciphertext-token");
+  expect(page.url()).not.toContain("ST01");
+});
+
 test("recovers an ambiguous payment link with its stored order capability", async ({
   page,
 }, testInfo) => {

@@ -10,6 +10,22 @@ docker compose up -d --wait
 
 Open `http://localhost:3100/scan/ST01-C01`. The local mock checkout is served by the API and requires no PayOS account or external request.
 
+The operations console is at `http://localhost:3100/admin`. Compose seeds the
+configured local admin account:
+
+```text
+Email: admin@charge.local
+Password: local-admin-password-change-me
+```
+
+Change `ADMIN_EMAIL` and `ADMIN_PASSWORD` before exposing any environment
+outside local development.
+
+From **Stations**, an administrator can add a station and initial connector,
+then render its encrypted QR. Customer station URLs have the form
+`/scan/station/<opaque-token>` and do not reveal station or connector codes.
+Set a unique `STATION_QR_ENCRYPTION_KEY` for every non-local environment.
+
 | Service            | Local URL                                                |
 | ------------------ | -------------------------------------------------------- |
 | Web                | `http://localhost:3100`                                  |

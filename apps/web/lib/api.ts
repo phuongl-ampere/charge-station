@@ -6,6 +6,16 @@ export interface Connector {
   hourlyPriceVnd: number;
 }
 
+export interface StationScan {
+  stationName: string;
+  connectors: Array<{
+    connectorCode: string;
+    status: Connector["status"];
+    allowedDurationsMinutes: number[];
+    hourlyPriceVnd: number;
+  }>;
+}
+
 export interface CheckoutOrder {
   orderId: string;
   amount: number;
@@ -54,8 +64,102 @@ export interface SessionStatus {
   operationalWarning: string | null;
 }
 
+export interface AdminOverview {
+  stations: number;
+  connectors: {
+    total: number;
+    available: number;
+    occupied: number;
+    offline: number;
+  };
+  sessions: {
+    active: number;
+    charging: number;
+    attention: number;
+  };
+  revenueTodayVnd: number;
+  paymentsPending: number;
+  alerts: AdminAlert[];
+}
+
+export interface AdminAlert {
+  category: "CONNECTOR_OFFLINE" | "START_FAILED" | "DEVICE_OFFLINE";
+  message: string;
+  stationCode: string;
+  connectorCode: string;
+  sessionId?: string;
+}
+
+export interface AdminSession {
+  id: string;
+  orderId: string;
+  status: SessionStatus["status"];
+  stationCode: string;
+  stationName: string;
+  connectorCode: string;
+  amountVnd: number;
+  durationMinutes: number;
+  requestedAt: string;
+  checkInAt: string | null;
+  expectedEndAt: string | null;
+  checkOutAt: string | null;
+  actualDurationSeconds: number | null;
+  estimatedRemainingSeconds: number | null;
+  lastDeviceEventAt: string | null;
+  operationalWarning: string | null;
+}
+
+export interface AdminStation {
+  id: string;
+  code: string;
+  name: string;
+  deviceId: string | null;
+  connectors: Array<{
+    id: string;
+    code: string;
+    status: Connector["status"];
+    hourlyPriceVnd: number | null;
+    activeSession: AdminSession | null;
+  }>;
+}
+
+export interface AdminPayment {
+  id: string;
+  provider: string;
+  status: string;
+  cancellationStatus: string;
+  amountVnd: number;
+  currency: string;
+  orderId: string;
+  payosOrderCode: string;
+  connectorCode: string;
+  checkoutUrl: string | null;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminDeviceTimelineItem {
+  id: string;
+  kind: "COMMAND" | "EVENT";
+  type: string;
+  status: string;
+  at: string;
+  connectorCode: string;
+  sessionId: string | null;
+  retryCount: number | null;
+  details: Record<string, unknown>;
+}
+
+export interface AdminStationQr {
+  stationId: string;
+  qrVersion: number;
+  scanUrl: string;
+}
+
 export interface ChargeApi {
   getConnector(connectorCode: string): Promise<Connector>;
+  getStationScan(token: string): Promise<StationScan>;
   createOrder(input: {
     connectorCode: string;
     durationMinutes: number;
@@ -66,6 +170,43 @@ export interface ChargeApi {
   ): Promise<CheckoutPayment>;
   getOrder(orderId: string, accessToken: string): Promise<OrderStatus>;
   getSession(sessionId: string, accessToken: string): Promise<SessionStatus>;
+  stopSession(
+    sessionId: string,
+    accessToken: string,
+  ): Promise<{ accepted: true }>;
+  retryStart(
+    sessionId: string,
+    accessToken: string,
+  ): Promise<{ accepted: true }>;
+}
+
+export interface AdminApi {
+  login(input: {
+    email: string;
+    password: string;
+  }): Promise<{ accessToken: string }>;
+  getOverview(accessToken: string): Promise<AdminOverview>;
+  getStations(accessToken: string): Promise<AdminStation[]>;
+  createStation(
+    input: {
+      code: string;
+      deviceId?: string;
+    },
+    accessToken: string,
+  ): Promise<AdminStation>;
+  getStationQr(
+    stationId: string,
+    accessToken: string,
+  ): Promise<AdminStationQr>;
+  rotateStationQr(
+    stationId: string,
+    accessToken: string,
+  ): Promise<AdminStationQr>;
+  getSessions(accessToken: string): Promise<AdminSession[]>;
+  getPayments(accessToken: string): Promise<AdminPayment[]>;
+  getDeviceTimeline(
+    accessToken: string,
+  ): Promise<AdminDeviceTimelineItem[]>;
   stopSession(
     sessionId: string,
     accessToken: string,
@@ -162,6 +303,11 @@ export function createChargeApi(origin = localApiOrigin): ChargeApi {
         local,
         `/public/connectors/${encodeURIComponent(connectorCode)}`,
       ),
+    getStationScan: (token) =>
+      request<StationScan>(
+        local,
+        `/public/stations/scan/${encodeURIComponent(token)}`,
+      ),
     createOrder: async (input) => {
       const order = await request<CheckoutOrder>(local, "/orders", {
         method: "POST",
@@ -213,3 +359,83 @@ export function createChargeApi(origin = localApiOrigin): ChargeApi {
 }
 
 export const chargeApi = createChargeApi();
+
+function adminHeaders(accessToken: string): HeadersInit {
+  return { authorization: `Bearer ${accessToken}` };
+}
+
+export function createAdminApi(origin = localApiOrigin): AdminApi {
+  const local = localOrigin(origin, localApiOrigin);
+  return {
+    login: (input) =>
+      request<{ accessToken: string }>(local, "/auth/login", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    getOverview: (accessToken) =>
+      request<AdminOverview>(local, "/admin/overview", {
+        headers: adminHeaders(accessToken),
+      }),
+    getStations: (accessToken) =>
+      request<AdminStation[]>(local, "/admin/stations", {
+        headers: adminHeaders(accessToken),
+      }),
+    createStation: (input, accessToken) =>
+      request<AdminStation>(local, "/admin/stations", {
+        method: "POST",
+        headers: adminHeaders(accessToken),
+        body: JSON.stringify(input),
+      }),
+    getStationQr: (stationId, accessToken) =>
+      request<AdminStationQr>(
+        local,
+        `/admin/stations/${encodeURIComponent(stationId)}/qr`,
+        { headers: adminHeaders(accessToken) },
+      ),
+    rotateStationQr: (stationId, accessToken) =>
+      request<AdminStationQr>(
+        local,
+        `/admin/stations/${encodeURIComponent(stationId)}/qr/rotate`,
+        {
+          method: "POST",
+          headers: adminHeaders(accessToken),
+        },
+      ),
+    getSessions: (accessToken) =>
+      request<AdminSession[]>(local, "/admin/sessions?limit=50", {
+        headers: adminHeaders(accessToken),
+      }),
+    getPayments: (accessToken) =>
+      request<AdminPayment[]>(local, "/admin/payments?limit=50", {
+        headers: adminHeaders(accessToken),
+      }),
+    getDeviceTimeline: (accessToken) =>
+      request<AdminDeviceTimelineItem[]>(
+        local,
+        "/admin/device-timeline?limit=100",
+        {
+          headers: adminHeaders(accessToken),
+        },
+      ),
+    stopSession: (sessionId, accessToken) =>
+      request<{ accepted: true }>(
+        local,
+        `/admin/sessions/${encodeURIComponent(sessionId)}/stop`,
+        {
+          method: "POST",
+          headers: adminHeaders(accessToken),
+        },
+      ),
+    retryStart: (sessionId, accessToken) =>
+      request<{ accepted: true }>(
+        local,
+        `/admin/sessions/${encodeURIComponent(sessionId)}/retry-start`,
+        {
+          method: "POST",
+          headers: adminHeaders(accessToken),
+        },
+      ),
+  };
+}
+
+export const adminApi = createAdminApi();

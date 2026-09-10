@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
+import { AppChrome } from "../components/AppChrome";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,18 +15,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <div className="app-frame">
-          <header className="topbar">
-            <a className="brand" href="/" aria-label="Charge Station home">
-              <span className="brand-mark" aria-hidden="true">
-                +
-              </span>
-              <span>Charge Station</span>
-            </a>
-            <span className="local-badge">Local network</span>
-          </header>
-          {children}
-        </div>
+        <AppChrome>{children}</AppChrome>
       </body>
     </html>
   );

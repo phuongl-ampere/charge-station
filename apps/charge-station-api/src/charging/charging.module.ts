@@ -15,5 +15,6 @@ import { ChargingService } from "./charging.service.js";
   ],
   controllers: [ChargingController],
   providers: [ChargingService],
+  exports: [ChargingService],
 })
 export class ChargingModule {}

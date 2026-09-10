@@ -52,6 +52,38 @@ describe("retryStart", () => {
   });
 });
 
+describe("encrypted station QR scan", () => {
+  it("requests the opaque token path without exposing a station code", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        stationName: "Riverside Station",
+        connectors: [
+          {
+            connectorCode: "ST01-C01",
+            status: "AVAILABLE",
+            allowedDurationsMinutes: [60, 120],
+            hourlyPriceVnd: 5000,
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      createChargeApi(localApiOrigin).getStationScan("ZX5fY2lwaGVydGV4dA"),
+    ).resolves.toMatchObject({
+      stationName: "Riverside Station",
+      connectors: [expect.objectContaining({ connectorCode: "ST01-C01" })],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${localApiOrigin}/public/stations/scan/ZX5fY2lwaGVydGV4dA`,
+      expect.objectContaining({ headers: {} }),
+    );
+  });
+});
+
 describe("createOrder checkout URL validation", () => {
   it("keeps an ambiguous payment response usable without a checkout URL", async () => {
     const fetchMock = vi.fn().mockResolvedValue({

@@ -40,7 +40,7 @@ NestJS uses Socket.IO to publish updates to the frontend. The IoT Service is int
 
 Docker Compose runs PostgreSQL, Charge Station API, IoT Service, and the Next.js web app locally. The API waits for PostgreSQL, runs migrations and the idempotent `ST01-C01` demo seed, then becomes healthy at `GET /health`; IoT exposes the same health shape at `GET /health`.
 
-Browser-facing URLs use `localhost`: web at `http://localhost:3000` and API at `http://localhost:4000`. The two backend services use Compose DNS exclusively: API calls `http://iot-service:4001` and IoT posts events to `http://charge-station-api:4000`. Local Compose defaults to `PAYOS_MODE=mock`, so payment-link creation and checkout make no external PayOS calls.
+Browser-facing URLs use `localhost`: web at `http://localhost:3100` and API at `http://localhost:4000`. The two backend services use Compose DNS exclusively: API calls `http://iot-service:4001` and IoT posts events to `http://charge-station-api:4000`. Local Compose defaults to `PAYOS_MODE=mock`, so payment-link creation and checkout make no external PayOS calls.
 
 ## Timer Ownership
 
@@ -55,8 +55,8 @@ The backend persists `startedAt` and `expectedEndAt` for UI display, monitoring 
 
 ## Payment and Charging Flow
 
-1. The QR code contains `stationCode` and `connectorCode`. The frontend fetches connector availability and pricing.
-2. The frontend submits `connectorCode` and `durationMinutes` to create an order. The backend verifies availability and calculates the amount.
+1. The physical station QR contains an AES-256-GCM encrypted station token, not a station or connector code. The frontend resolves the token, displays selectable connectors for that station, and fetches availability and pricing.
+2. The frontend submits the selected `connectorCode` and `durationMinutes` to create an order. The backend verifies availability and calculates the amount.
 3. The backend creates an `Order` with `PENDING_PAYMENT`, creates a PayOS payment link, and returns its `checkoutUrl`.
 4. The customer pays. PayOS sends a webhook to Charge Station.
 5. The backend verifies the signature, amount, and `orderCode`, processes the callback idempotently, and updates the order to `PAID`.
@@ -97,6 +97,7 @@ CHARGING -> DEVICE_OFFLINE
 | Method | Path                                | Purpose                                                                          |
 | ------ | ----------------------------------- | -------------------------------------------------------------------------------- |
 | `GET`  | `/public/connectors/:connectorCode` | Get connector availability, pricing, and permitted durations.                    |
+| `GET`  | `/public/stations/scan/:token`      | Resolve an encrypted station QR and return its selectable connectors.            |
 | `POST` | `/orders`                           | Create an order and payment request. Require JWT if the system requires sign-in. |
 | `GET`  | `/orders/:id`                       | Get order and payment status.                                                    |
 | `GET`  | `/sessions/:id`                     | Get charging status and estimated remaining time.                                |
@@ -111,6 +112,52 @@ Create-order request:
   "durationMinutes": 120
 }
 ```
+
+## Admin Operations Console
+
+The protected web console at `/admin` gives operations staff a live view of the
+charging estate. It polls the Charge Station API every five seconds; this is a
+display and operational-control channel, not the IoT relay timer authority.
+
+| View | Data shown |
+| --- | --- |
+| Overview | Station and connector totals, active sessions, paid PayOS revenue for the local day, pending payments, and operational alerts. |
+| Stations | Connector availability, current session state, check-in, estimated device time remaining, device mapping, and stop/retry actions. |
+| Sessions | Current and historical sessions with order amount, booked duration, check-in, expected finish, check-out, and actual run time. |
+| Payments | PayOS order code, payment/cancellation lifecycle, amount, connector, expiry, and update time. |
+| Device activity | Persisted command and event timeline, status, retry count, connector, and session correlation. |
+
+`ADMIN` and `OPERATOR` JWT roles can read the operations APIs and request stop
+or retry-start actions. `CUSTOMER` tokens receive `403 Forbidden`. Stop and
+retry requests reuse the existing command dispatcher and device event flow;
+they never bypass IoT Service or alter the device-owned timer.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/admin/overview` | Operations totals and alerts. |
+| `GET` | `/admin/stations` | Station/connector live state. |
+| `GET` | `/admin/sessions?limit=50` | Latest charging sessions and check-in/out ledger. |
+| `GET` | `/admin/payments?limit=50` | Latest PayOS payment ledger. |
+| `GET` | `/admin/device-timeline?limit=100` | Command and device-event audit timeline. |
+| `POST` | `/admin/sessions/:id/stop` | Request a normal IoT stop command. |
+| `POST` | `/admin/sessions/:id/retry-start` | Retry a fresh recoverable failed start command. |
+| `POST` | `/admin/stations` | Create a station from its code and optional device ID. |
+| `GET` | `/admin/stations/:id/qr` | Generate the encrypted station scan URL used to render a QR code. |
+| `POST` | `/admin/stations/:id/qr/rotate` | Increment the QR version and invalidate all prior station QR tokens. |
+
+For local Compose, the idempotent seed creates an `ADMIN` account only when
+both `ADMIN_EMAIL` and `ADMIN_PASSWORD` are configured. These values must be
+set explicitly; production credentials must not use the local defaults.
+
+Station creation and station-QR endpoints require the `ADMIN` role. Creating a
+station uses the station code as its stored display name and provisions the
+internal default charge point `<stationCode>-C01` required by the existing
+payment and IoT model; neither field is entered by an administrator. A QR token
+encrypts `{ stationId, qrVersion }` using AES-256-GCM with
+`STATION_QR_ENCRYPTION_KEY`, a unique 64-character hexadecimal key. The token
+is opaque, URL-safe, and does not expose station or connector codes. Rotating a
+station QR increments `stations.qrVersion`, so any previously printed token
+resolves as `404` without needing to persist individual QR tokens.
 
 Response:
 
@@ -237,7 +284,7 @@ When the REST mock is replaced by MQTT or a SIM-based protocol, the device-proto
 | Entity                 | Core data                                                                                        |
 | ---------------------- | ------------------------------------------------------------------------------------------------ |
 | `users`                | Accounts, roles, and JWT identity.                                                               |
-| `stations`             | Charging stations and device mappings.                                                           |
+| `stations`             | Charging stations, device mappings, and `qrVersion` used to invalidate rotated QR tokens.       |
 | `connectors`           | Connectors, availability, and applicable pricing.                                                |
 | `pricing_plans`        | Pricing rules and time unit.                                                                     |
 | `orders`               | Amount, payment state, and unique numeric PayOS order code.                                      |
@@ -264,6 +311,7 @@ If Socket.IO disconnects, the frontend polls `GET /orders/:id` and `GET /session
 - Process PayOS webhook callbacks idempotently and retain the raw payload for reconciliation.
 - Never trust `amount`, `price`, or payment results supplied by the frontend.
 - Protect user APIs with JWT; use PayOS webhook signatures and service authentication between services.
+- Use `STATION_QR_ENCRYPTION_KEY` for station QR encryption. Do not expose station codes in physical QR URLs; rotate the QR version when a printed QR must be revoked.
 - Devices must use `commandId` to prevent executing a relay command twice.
 - The backend retries commands with a bounded retry policy; retries never change the session `durationSeconds`.
 - If an acknowledgement does not arrive before its deadline, mark the session `START_FAILED` or `DEVICE_OFFLINE`, and notify the frontend and operations users.

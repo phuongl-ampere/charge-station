@@ -20,6 +20,7 @@ import { AddActiveDeviceCommandSessionTypeUnique } from "./migrations/004-device
 import { AddPaymentReservationExpiry } from "./migrations/005-payment-reservation-expiry.js";
 import { AddPaymentCancellationState } from "./migrations/006-payment-cancellation-state.js";
 import { AddDeviceCommandDispatchClaim } from "./migrations/007-device-command-dispatch-claim.js";
+import { AddStationQrVersion } from "./migrations/008-station-qr-version.js";
 
 export enum UserRole {
   CUSTOMER = "CUSTOMER",
@@ -111,6 +112,9 @@ export class Station {
 
   @Column({ name: "device_id", type: "varchar", nullable: true })
   deviceId!: string | null;
+
+  @Column({ name: "qr_version", type: "integer", default: 1 })
+  qrVersion!: number;
 
   @OneToMany(() => Connector, (connector) => connector.station)
   connectors!: Connector[];
@@ -449,6 +453,7 @@ export const migrations = [
   AddPaymentReservationExpiry,
   AddPaymentCancellationState,
   AddDeviceCommandDispatchClaim,
+  AddStationQrVersion,
 ];
 
 export const databaseOptions: DataSourceOptions = {

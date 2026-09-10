@@ -28,6 +28,11 @@ The API calls IoT at `http://iot-service:4001`; IoT posts device events to `http
 
 Open `http://localhost:3100/scan/ST01-C01` to create a local order. With `PAYOS_MODE=mock`, checkout is an API-hosted local page and no external PayOS request is made.
 
+Open `http://localhost:3100/admin` for station operations. Local Compose seeds
+an `ADMIN` user from `ADMIN_EMAIL` and `ADMIN_PASSWORD`; the Compose defaults
+are `admin@charge.local` and `local-admin-password-change-me`. Set both values
+explicitly for every non-local environment.
+
 Stop the stack:
 
 ```sh
@@ -53,11 +58,29 @@ PAYOS_CHECKSUM_KEY=local-checksum-key
 MOCK_IOT_FAILURE_MODE=none
 PAYMENT_RESERVATION_TTL_MINUTES=15
 PAYMENT_REAPER_INTERVAL_MS=60000
+ADMIN_EMAIL=admin@charge.local
+ADMIN_PASSWORD=local-admin-password-change-me
+STATION_QR_ENCRYPTION_KEY=<64-character-hex-key>
 IOT_EVENT_JOURNAL_PATH=./data/iot-event-journal.json
 IOT_EVENT_REQUEST_TIMEOUT_MS=3000
 ```
 
 The mock IoT service accepts `MOCK_IOT_FAILURE_MODE=timeout`, `offline`, or `command_failed` to exercise command failure paths. `MOCK_IOT_START_DELAY_MS` and `MOCK_IOT_HEARTBEAT_MS` control the mock timing. Change an environment value in `docker-compose.yml`, then recreate the affected service.
+
+## Station QR Management
+
+Sign in to `http://localhost:3100/admin`, open **Stations**, and select **Add
+station**. The form needs only a station code and optional device ID. The
+platform provisions its internal default charge point automatically so the
+existing payment/IoT model can start charging. The resulting modal renders a
+station QR and its encrypted scan URL. QR scans open
+`/scan/station/<opaque-token>`; the customer chooses an available connector
+without station or connector codes appearing in the URL.
+
+`STATION_QR_ENCRYPTION_KEY` is mandatory for issuing and resolving station QR
+tokens. It must be a unique 64-character hexadecimal key in each environment.
+Use **Rotate QR** only when old printed QR codes must stop working: it changes
+the station QR version and all older tokens return `404`.
 
 `COMMAND_ACCEPTED`, `RUNNING`, `STOPPED`, `COMMAND_FAILED`, and `DEVICE_OFFLINE` callbacks are appended to the local JSON journal before delivery. The journal preserves event ID, payload, per-session sequence, retry count, and delivery state; undelivered events replay after an IoT restart. `IOT_EVENT_JOURNAL_PATH` defaults to `./data/iot-event-journal.json`. Compose mounts that path on the `charge-station-iot-events` named volume. Callback requests use `IOT_EVENT_REQUEST_TIMEOUT_MS` (3 seconds by default), retry after 100 ms, 500 ms, then a capped 1 second interval, and clear retry timers on shutdown. Heartbeats remain best effort.
 

@@ -32,6 +32,9 @@ services:
     environment:
       DATABASE_URL: postgres://charge:charge@postgres:5432/charge_station
       JWT_SECRET: development-jwt-secret-change-me
+      ADMIN_EMAIL: admin@charge.local
+      ADMIN_PASSWORD: local-admin-password-change-me
+      STATION_QR_ENCRYPTION_KEY: 4d8eae9b3271c5f079cfb8b4f14ba3ca9d7e6a0b4c32f807c2d2ab5e983f1140
       FRONTEND_URL: http://localhost:3100
       CHARGE_STATION_API_URL: http://charge-station-api:4000
       IOT_SERVICE_URL: http://iot-service:4001
