@@ -8,6 +8,7 @@ import {
   DeviceEvent,
 } from "../database/data-source.js";
 import { CommandDispatcherService } from "./command-dispatcher.service.js";
+import { CoreTelemetryMonitor } from "./core-telemetry-monitor.service.js";
 import {
   DeviceEventsController,
   ServiceTokenGuard,
@@ -30,6 +31,7 @@ import { RealtimeModule } from "../realtime/realtime.module.js";
   controllers: [DeviceEventsController],
   providers: [
     CommandDispatcherService,
+    CoreTelemetryMonitor,
     DeviceEventsService,
     CoreIotClient,
     IotServiceClient,

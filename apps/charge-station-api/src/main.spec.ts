@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { CommandDispatcherService } from "./iot/command-dispatcher.service.js";
+import { CoreTelemetryMonitor } from "./iot/core-telemetry-monitor.service.js";
 import { PaymentExpirationService } from "./payments/payment-expiration.service.js";
 
 const createApp = vi.hoisted(() => vi.fn());
@@ -21,7 +22,7 @@ vi.mock("./http-app.js", () => ({
 }));
 
 describe("API bootstrap", () => {
-  it("starts command recovery and payment expiration only after the listener is ready", async () => {
+  it("starts command recovery, telemetry monitoring, and payment expiration only after the listener is ready", async () => {
     let listening = false;
     const dispatcher = {
       dispatchPendingAfterReady: vi.fn(),
@@ -29,10 +30,14 @@ describe("API bootstrap", () => {
     const paymentExpiration = {
       start: vi.fn(),
     };
+    const telemetryMonitor = {
+      start: vi.fn(),
+    };
     const app = {
       get: vi.fn((token: unknown) => {
         expect(listening).toBe(true);
         if (token === CommandDispatcherService) return dispatcher;
+        if (token === CoreTelemetryMonitor) return telemetryMonitor;
         if (token === PaymentExpirationService) return paymentExpiration;
         throw new Error("Unexpected provider");
       }),
@@ -48,6 +53,7 @@ describe("API bootstrap", () => {
     expect(configureApp).toHaveBeenCalledWith(app);
     expect(app.listen).toHaveBeenCalledWith(4000);
     expect(dispatcher.dispatchPendingAfterReady).toHaveBeenCalledOnce();
+    expect(telemetryMonitor.start).toHaveBeenCalledOnce();
     expect(paymentExpiration.start).toHaveBeenCalledOnce();
   });
 });
