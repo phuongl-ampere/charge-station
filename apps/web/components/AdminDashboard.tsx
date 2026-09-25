@@ -481,6 +481,7 @@ function StationsPanel({
               </button>
             </div>
             <div className="admin-connector-list">
+              <StationTelemetry telemetry={station.telemetry} />
               {station.connectors.map((connector) => (
                 <div className="admin-connector-row" key={connector.id}>
                   <div className="admin-connector-title">
@@ -533,6 +534,83 @@ function StationsPanel({
         ) : null}
       </div>
     </section>
+  );
+}
+
+function StationTelemetry({
+  telemetry,
+}: {
+  telemetry: AdminStation["telemetry"];
+}) {
+  if (telemetry.status === "UNAVAILABLE") {
+    return (
+      <section
+        aria-label="Live meter telemetry"
+        className="admin-telemetry-strip admin-telemetry-unavailable"
+      >
+        <div className="admin-telemetry-meta">
+          <span>Live meter</span>
+        </div>
+        <p role="status">Telemetry unavailable</p>
+        <small>No recent device sample is available for this station.</small>
+      </section>
+    );
+  }
+
+  return (
+    <section aria-label="Live meter telemetry" className="admin-telemetry-strip">
+      <div className="admin-telemetry-meta">
+        <span
+          className={
+            telemetry.relayState === true
+              ? "is-on"
+              : telemetry.relayState === false
+                ? "is-off"
+                : undefined
+          }
+        >
+          {telemetry.relayState === null
+            ? "Relay state unknown"
+            : telemetry.relayState
+              ? "Relay on"
+              : "Relay off"}
+        </span>
+        <time dateTime={telemetry.eventAt}>
+          Sample {formatDateTime(telemetry.eventAt)}
+        </time>
+      </div>
+      <dl className="admin-telemetry-readings">
+        <TelemetryReading
+          label="Volt"
+          value={formatVoltage(telemetry.voltageV)}
+        />
+        <TelemetryReading
+          label="Amp"
+          value={formatCurrent(telemetry.currentA)}
+        />
+        <TelemetryReading
+          label="Power"
+          value={formatPower(telemetry.powerW)}
+        />
+        <TelemetryReading
+          label="Energy"
+          value={formatEnergy(telemetry.energyKwh)}
+        />
+        <TelemetryReading
+          label="Remain"
+          value={formatRemaining(telemetry.remainingSeconds)}
+        />
+      </dl>
+    </section>
+  );
+}
+
+function TelemetryReading({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </div>
   );
 }
 
@@ -1012,6 +1090,25 @@ function formatDateTime(value: string | null): string {
 function formatRemaining(seconds: number | null): string {
   if (seconds === null) return "No device time";
   return formatDuration(seconds);
+}
+
+function formatVoltage(value: number | null): string {
+  return value === null ? "No reading" : `${value.toFixed(1)} V`;
+}
+
+function formatCurrent(value: number | null): string {
+  return value === null ? "No reading" : `${value.toFixed(1)} A`;
+}
+
+function formatPower(value: number | null): string {
+  if (value === null) return "No reading";
+  return value >= 1_000
+    ? `${(value / 1_000).toFixed(2)} kW`
+    : `${value.toFixed(0)} W`;
+}
+
+function formatEnergy(value: number | null): string {
+  return value === null ? "No reading" : `${value.toFixed(3)} kWh`;
 }
 
 function formatDuration(seconds: number): string {

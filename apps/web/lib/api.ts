@@ -114,6 +114,20 @@ export interface AdminStation {
   code: string;
   name: string;
   deviceId: string | null;
+  telemetry:
+    | {
+        status: "AVAILABLE";
+        eventAt: string;
+        relayState: boolean | null;
+        sessionId: string | null;
+        remainingSeconds: number | null;
+        lastStopReason: string | null;
+        voltageV: number | null;
+        currentA: number | null;
+        powerW: number | null;
+        energyKwh: number | null;
+      }
+    | { status: "UNAVAILABLE" };
   connectors: Array<{
     id: string;
     code: string;

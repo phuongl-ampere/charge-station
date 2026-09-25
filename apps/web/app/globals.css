@@ -1055,6 +1055,59 @@ input {
   color: var(--steel);
   font-size: 12px;
 }
+.admin-telemetry-strip {
+  display: grid;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--mist) 52%, var(--paper));
+}
+.admin-telemetry-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  color: var(--steel);
+  font: 800 10px var(--narrow);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.admin-telemetry-meta .is-on {
+  color: var(--signal);
+}
+.admin-telemetry-meta .is-off {
+  color: var(--coral);
+}
+.admin-telemetry-readings {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+.admin-telemetry-readings div {
+  min-width: 0;
+}
+.admin-telemetry-readings dt {
+  color: var(--steel);
+  font: 800 9px var(--narrow);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.admin-telemetry-readings dd {
+  margin: 3px 0 0;
+  color: var(--graphite);
+  font: 800 14px var(--narrow);
+  overflow-wrap: anywhere;
+}
+.admin-telemetry-unavailable p {
+  margin: 0;
+  color: var(--coral);
+  font: 800 13px var(--narrow);
+}
+.admin-telemetry-unavailable small {
+  color: var(--steel);
+  font-size: 11px;
+}
 .admin-command-button {
   min-height: 33px;
   padding: 0 9px;
@@ -1354,6 +1407,9 @@ input {
   }
   .admin-idle-readout {
     grid-column: span 2;
+  }
+  .admin-telemetry-readings {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .admin-command-button {
     justify-self: start;

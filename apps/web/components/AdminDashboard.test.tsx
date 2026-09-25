@@ -19,6 +19,7 @@ const api = {
       code: "ST01",
       name: "Demo Station",
       deviceId: "dev_ST01",
+      telemetry: { status: "UNAVAILABLE" },
       connectors: [
         {
           id: "connector-1",
@@ -55,6 +56,7 @@ const api = {
     code: "ST02",
     name: "ST02",
     deviceId: "dev_ST02",
+    telemetry: { status: "UNAVAILABLE" },
     qrVersion: 1,
     connectors: [],
   }),
@@ -73,6 +75,78 @@ const api = {
 };
 
 describe("AdminDashboard", () => {
+  it("renders voltage current power energy and remaining time", async () => {
+    const user = userEvent.setup();
+    const apiWithTelemetry = {
+      ...api,
+      getStations: vi.fn().mockResolvedValue([
+        {
+          id: "station-1",
+          code: "ST01",
+          name: "Demo Station",
+          deviceId: "dev_ST01",
+          telemetry: {
+            status: "AVAILABLE",
+            eventAt: "2026-09-25T01:00:02.000Z",
+            relayState: true,
+            sessionId: null,
+            lastStopReason: null,
+            voltageV: 230.4,
+            currentA: 10.2,
+            powerW: 2350,
+            energyKwh: 0.0174,
+            remainingSeconds: 3540,
+          },
+          connectors: [],
+        },
+      ]),
+    };
+    render(
+      <AdminDashboard
+        accessToken="admin"
+        api={apiWithTelemetry}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Stations" }));
+
+    expect(await screen.findByText("230.4 V")).toBeInTheDocument();
+    expect(screen.getByText("10.2 A")).toBeInTheDocument();
+    expect(screen.getByText("2.35 kW")).toBeInTheDocument();
+    expect(screen.getByText("0.017 kWh")).toBeInTheDocument();
+    expect(screen.getByText("0h 59m")).toBeInTheDocument();
+  });
+
+  it("renders unavailable telemetry without false zero values", async () => {
+    const user = userEvent.setup();
+    const apiWithoutTelemetry = {
+      ...api,
+      getStations: vi.fn().mockResolvedValue([
+        {
+          id: "station-1",
+          code: "ST01",
+          name: "Demo Station",
+          deviceId: "dev_ST01",
+          telemetry: { status: "UNAVAILABLE" },
+          connectors: [],
+        },
+      ]),
+    };
+    render(
+      <AdminDashboard
+        accessToken="admin"
+        api={apiWithoutTelemetry}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Stations" }));
+
+    expect(await screen.findByText("Telemetry unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("0.0 V")).not.toBeInTheDocument();
+  });
+
   it("shows live money and lets an operator stop an occupied connector", async () => {
     const user = userEvent.setup();
     render(

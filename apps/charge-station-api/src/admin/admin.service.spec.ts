@@ -16,9 +16,55 @@ import {
   Station,
 } from "../database/data-source.js";
 import { AdminService } from "./admin.service.js";
+import type { CoreIotClient } from "../iot/core-iot.client.js";
 import type { StationQrService } from "../stations/station-qr.service.js";
 
 describe("AdminService", () => {
+  it("attaches Core telemetry to mapped station", async () => {
+    const station = {
+      id: "station-1",
+      code: "ST01",
+      name: "Demo Station",
+      deviceId: "core-device",
+    } as Station;
+    const core = {
+      latestTelemetry: vi.fn().mockResolvedValue({
+        eventAt: "2026-09-25T01:00:02.000Z",
+        relayState: true,
+        voltageV: 230.4,
+        currentA: 10.2,
+        powerW: 2350,
+        energyKwh: 0.0174,
+        remainingSeconds: 3540,
+      }),
+    };
+    const admin = new AdminService(
+      {
+        getRepository: (entity: unknown) => {
+          if (entity === Station) return { find: vi.fn().mockResolvedValue([station]) };
+          if (entity === Connector) return { find: vi.fn().mockResolvedValue([]) };
+          if (entity === ChargingSession) return { find: vi.fn().mockResolvedValue([]) };
+          throw new Error("Unexpected repository");
+        },
+      } as unknown as DataSource,
+      {} as StationQrService,
+      core as unknown as CoreIotClient,
+    );
+
+    await expect(admin.getStations()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          deviceId: "core-device",
+          telemetry: expect.objectContaining({
+            status: "AVAILABLE",
+            voltageV: 230.4,
+            powerW: 2350,
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("summarizes live connectors, today's paid revenue, and operational alerts", async () => {
     const now = new Date();
     const station = {

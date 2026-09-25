@@ -20,6 +20,7 @@ import {
   PricingPlan,
   Station,
 } from "../database/data-source.js";
+import { CoreIotClient } from "../iot/core-iot.client.js";
 import { StationQrService } from "../stations/station-qr.service.js";
 
 const activeSessionStatuses = new Set<ChargingSessionStatus>([
@@ -72,6 +73,7 @@ export class AdminService {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly stationQrService: StationQrService,
+    private readonly coreIotClient: CoreIotClient,
   ) {}
 
   async getOverview() {
@@ -153,11 +155,27 @@ export class AdminService {
       }
     }
 
-    return stations.map((station) => ({
+    const telemetryResults = await Promise.allSettled(
+      stations.map((station) =>
+        station.deviceId
+          ? this.coreIotClient.latestTelemetry(station.deviceId).catch(() => null)
+          : Promise.resolve(null),
+      ),
+    );
+
+    return stations.map((station, index) => {
+      const telemetryResult = telemetryResults[index];
+      const telemetry =
+        telemetryResult?.status === "fulfilled" ? telemetryResult.value : null;
+
+      return {
       id: station.id,
       code: station.code,
       name: station.name,
       deviceId: station.deviceId,
+      telemetry: telemetry
+        ? { status: "AVAILABLE" as const, ...telemetry }
+        : { status: "UNAVAILABLE" as const },
       connectors: connectors
         .filter((connector) => connector.station.id === station.id)
         .map((connector) => ({
@@ -169,7 +187,8 @@ export class AdminService {
             ? this.toSessionView(currentSessionByConnector.get(connector.id)!)
             : null,
         })),
-    }));
+      };
+    });
   }
 
   async createStation(input: CreateStationInput) {
@@ -218,6 +237,7 @@ export class AdminService {
         code: station.code,
         name: station.name,
         deviceId: station.deviceId,
+        telemetry: { status: "UNAVAILABLE" as const },
         qrVersion: station.qrVersion,
         connectors: [
           {
