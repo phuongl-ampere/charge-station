@@ -8,10 +8,31 @@ from src.main import (
     configure_mqtt_callbacks,
     start_mqtt_client,
 )
-from src.rpc_readiness import RPC_REQUEST_TOPIC, RpcSubscriptionReadiness
+from src.rpc_readiness import (
+    RPC_REQUEST_TOPIC,
+    RpcSubscriptionReadiness,
+    telemetry_publish_is_allowed,
+)
 
 
 class RpcSubscriptionReadinessTests(unittest.TestCase):
+    def test_telemetry_gate_tracks_exact_rpc_subscription_readiness(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            readiness = RpcSubscriptionReadiness(
+                Path(temporary_directory) / "simulator-ready"
+            )
+
+            self.assertFalse(telemetry_publish_is_allowed(readiness))
+
+            readiness.record_subscription_request(
+                mid=7, topic=RPC_REQUEST_TOPIC, qos=1
+            )
+            readiness.record_suback(mid=7, granted_qos=[1])
+            self.assertTrue(telemetry_publish_is_allowed(readiness))
+
+            readiness.record_connection_attempt()
+            self.assertFalse(telemetry_publish_is_allowed(readiness))
+
     def test_async_client_start_configures_retries_before_starting_the_loop(self) -> None:
         client = FakeMqttClient()
 

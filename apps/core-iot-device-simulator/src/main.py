@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from .device_state import ChargeDeviceState
-from .rpc_readiness import RPC_REQUEST_TOPIC, RPC_REQUEST_QOS, RpcSubscriptionReadiness
+from .rpc_readiness import (
+    RPC_REQUEST_TOPIC,
+    RPC_REQUEST_QOS,
+    RpcSubscriptionReadiness,
+    telemetry_publish_is_allowed,
+)
 
 
 RPC_RESPONSE_TOPIC = "v1/devices/me/rpc/response/{}"
@@ -225,11 +230,12 @@ def run() -> None:
         while True:
             with state_lock:
                 telemetry = state.sample(now=time.monotonic())
-            client.publish(
-                TELEMETRY_TOPIC,
-                json.dumps(telemetry, separators=(",", ":")),
-                qos=1,
-            )
+            if telemetry_publish_is_allowed(readiness):
+                client.publish(
+                    TELEMETRY_TOPIC,
+                    json.dumps(telemetry, separators=(",", ":")),
+                    qos=1,
+                )
             time.sleep(telemetry_interval_seconds)
     finally:
         client.loop_stop()

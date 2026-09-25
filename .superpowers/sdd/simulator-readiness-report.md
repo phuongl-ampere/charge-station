@@ -95,3 +95,27 @@ asynchronous connect, and loop-start ordering.
 Follow-up verification also repeated `py_compile`, `git diff --check`, `docker compose
 config -q` with non-secret placeholders, and the simulator image build successfully. No new
 live Core E2E attempt was run.
+
+## Telemetry recovery follow-up
+
+Telemetry sampling now continues on its normal interval, preserving relay expiry and energy
+accounting, but MQTT publication is gated by a thread-safe readiness query. The gate is false
+initially and after disconnect, failed subscription, reconnect, or any non-exact SUBACK; it
+becomes true only after the exact QoS-1 RPC subscription is accepted. This prevents the
+asynchronous Paho client from accumulating stale QoS-1 telemetry while recovering.
+
+### Telemetry TDD evidence
+
+The new pure readiness/publish-gate test first failed because
+`telemetry_publish_is_allowed` did not exist. After adding the lock-protected readiness
+state and loop guard, the focused suite passed. The final full simulator suite passed:
+
+```text
+Ran 15 tests in 0.004s
+OK
+```
+
+The test verifies publication is denied before subscription, allowed only after the single
+QoS-1 SUBACK, and denied again on a connection reset. `py_compile`, `git diff --check`,
+Compose config validation with non-secret placeholders, and the rebuilt simulator image all
+completed successfully. No live Core E2E attempt was run.
