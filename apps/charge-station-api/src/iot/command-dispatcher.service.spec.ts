@@ -17,6 +17,8 @@ import {
   IotServiceClient,
   IotTransportError,
 } from "./iot-service.client.js";
+import { CoreIotClient } from "./core-iot.client.js";
+import { DeviceEventsService } from "./device-events.service.js";
 
 describe("CommandDispatcherService", () => {
   it("sends the immutable command values and marks the persisted command SENT", async () => {
@@ -44,6 +46,8 @@ describe("CommandDispatcherService", () => {
       sessionId: command.session.id,
       stationCode: "ST01",
       connectorCode: "ST01-C01",
+      deviceId: "core-device",
+      relayId: "relay-1",
       durationSeconds: 7200,
       expiresAt: command.payload.expiresAt,
       configVersion: 1,
@@ -66,6 +70,53 @@ describe("CommandDispatcherService", () => {
       }),
       expect.objectContaining({ status: DeviceCommandStatus.SENT }),
     );
+  });
+
+  it("emits accepted then running only after Core confirms that the relay is on", async () => {
+    const command = createCommand();
+    const commandRepository = {
+      findOne: vi.fn().mockResolvedValue(command),
+      save: vi.fn().mockImplementation(async (entity) => entity),
+      update: conditionalCommandUpdate(command),
+    };
+    const dataSource = {
+      getRepository: vi.fn().mockReturnValue(commandRepository),
+    };
+    const legacyClient = { start: vi.fn() };
+    const core = {
+      setRelay: vi.fn().mockResolvedValue({
+        commandId: "core-command",
+        relayId: "relay-1",
+        enabled: true,
+        remainingSeconds: 7200,
+      }),
+    };
+    const events = { handle: vi.fn().mockResolvedValue({ accepted: true }) };
+    const service = new CommandDispatcherService(
+      dataSource as unknown as DataSource,
+      legacyClient as unknown as IotServiceClient,
+      undefined,
+      core as unknown as CoreIotClient,
+      events as unknown as DeviceEventsService,
+    );
+
+    await service.dispatch(command.commandId);
+
+    expect(core.setRelay).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandId: command.commandId,
+        deviceId: "core-device",
+        relayId: "relay-1",
+        enabled: true,
+        durationSeconds: 7200,
+        sessionId: command.session.id,
+      }),
+    );
+    expect(events.handle.mock.calls.map(([event]) => event.type)).toEqual([
+      "COMMAND_ACCEPTED",
+      "RUNNING",
+    ]);
+    expect(legacyClient.start).not.toHaveBeenCalled();
   });
 
   it("does not overwrite an ACKED command when the device event wins after send", async () => {
@@ -174,6 +225,9 @@ describe("CommandDispatcherService", () => {
       commandType: "STOP_CHARGING",
       payload: {
         sessionId: "session_1",
+        connectorCode: "ST01-C01",
+        deviceId: "core-device",
+        relayId: "relay-1",
         reason: "USER_REQUESTED",
       },
     });
@@ -199,6 +253,9 @@ describe("CommandDispatcherService", () => {
     expect(iotClient.stop).toHaveBeenCalledWith({
       commandId: command.commandId,
       sessionId: "session_1",
+      connectorCode: "ST01-C01",
+      deviceId: "core-device",
+      relayId: "relay-1",
       reason: "USER_REQUESTED",
     });
     expect(iotClient.start).not.toHaveBeenCalled();
@@ -850,6 +907,8 @@ function createCommand(overrides: Partial<DeviceCommand> = {}): DeviceCommand {
     payload: {
       stationCode: "ST01",
       connectorCode: "ST01-C01",
+      deviceId: "core-device",
+      relayId: "relay-1",
       sessionId: session.id,
       durationSeconds: 7200,
       expiresAt,

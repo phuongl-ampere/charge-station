@@ -119,6 +119,8 @@ export class ChargingService {
       session.status = ChargingSessionStatus.STOPPING;
       await sessionRepository.save(session);
 
+      const deviceId = deviceIdForSession(session);
+
       const command = commandRepository.create({
         id: randomUUID(),
         commandId: randomUUID(),
@@ -126,6 +128,9 @@ export class ChargingService {
         commandType: "STOP_CHARGING",
         payload: {
           sessionId: session.id,
+          connectorCode: session.connector.code,
+          deviceId,
+          relayId: relayIdFromEnvironment(),
           reason,
         },
         retryCount: 0,
@@ -263,6 +268,22 @@ function readStopReason(
     throw new BadRequestException("Failed stop command has an invalid reason");
   }
   return reason;
+}
+
+function deviceIdForSession(session: ChargingSession): string {
+  const mapped = session.connector?.station?.deviceId;
+  const configured = process.env.IOT_CORE_DEVICE_ID?.trim();
+  if (typeof mapped === "string" && mapped) {
+    return mapped;
+  }
+  if (configured) {
+    return configured;
+  }
+  throw new BadRequestException("Charging session has no Core IoT device mapping");
+}
+
+function relayIdFromEnvironment(): string {
+  return process.env.IOT_CORE_RELAY_ID?.trim() || "relay-1";
 }
 
 async function lockChargingSessionId(

@@ -30,6 +30,12 @@ import {
   IotServiceClient,
   IotTransportError,
 } from "./iot-service.client.js";
+import {
+  CoreIotClient,
+  CoreIotCommandRejectedError,
+  CoreIotTransportError,
+} from "./core-iot.client.js";
+import { DeviceEventsService } from "./device-events.service.js";
 
 const RETRY_DELAYS_MS = [1_000, 5_000, 20_000] as const;
 const IOT_READINESS_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 5_000] as const;
@@ -68,6 +74,10 @@ export class CommandDispatcherService
     @Optional()
     @Inject(ChargeGateway)
     private readonly gateway?: ChargeGateway,
+    @Optional()
+    private readonly coreIotClient?: CoreIotClient,
+    @Optional()
+    private readonly deviceEventsService?: DeviceEventsService,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
@@ -238,7 +248,10 @@ export class CommandDispatcherService
       this.clearClaimRecovery(command.commandId, claim.token);
       return;
     } catch (error: unknown) {
-      if (error instanceof IotTransportError) {
+      if (
+        error instanceof IotTransportError ||
+        error instanceof CoreIotTransportError
+      ) {
         if (
           !Number.isInteger(command.retryCount) ||
           command.retryCount < 0 ||
@@ -275,7 +288,8 @@ export class CommandDispatcherService
       }
 
       if (
-        error instanceof IotCommandRejectedError &&
+        (error instanceof IotCommandRejectedError ||
+          error instanceof CoreIotCommandRejectedError) &&
         command.commandType === "START_CHARGING"
       ) {
         await this.markDefinitiveStartFailure(
@@ -294,11 +308,54 @@ export class CommandDispatcherService
   private async send(
     command: StartChargingCommand | StopChargingCommand,
   ): Promise<void> {
+    if (this.coreIotClient) {
+      await this.sendThroughCore(command);
+      return;
+    }
     if ("durationSeconds" in command) {
       await this.iotServiceClient.start(command);
       return;
     }
     await this.iotServiceClient.stop(command);
+  }
+
+  private async sendThroughCore(
+    command: StartChargingCommand | StopChargingCommand,
+  ): Promise<void> {
+    const result = await this.coreIotClient!.setRelay({
+      commandId: command.commandId,
+      deviceId: command.deviceId,
+      relayId: command.relayId,
+      enabled: "durationSeconds" in command,
+      ...( "durationSeconds" in command
+        ? {
+            durationSeconds: command.durationSeconds,
+            sessionId: command.sessionId,
+          }
+        : {}),
+    });
+    if (!this.deviceEventsService) {
+      return;
+    }
+    if ("durationSeconds" in command) {
+      await this.deviceEventsService.handle(
+        eventFor(command, "COMMAND_ACCEPTED", { relayState: "ON" }),
+      );
+      await this.deviceEventsService.handle(
+        eventFor(command, "RUNNING", {
+          relayState: "ON",
+          remainingSeconds:
+            result.remainingSeconds ?? command.durationSeconds,
+        }),
+      );
+      return;
+    }
+    await this.deviceEventsService.handle(
+      eventFor(command, "STOPPED", {
+        reason: command.reason,
+        relayState: "OFF",
+      }),
+    );
   }
 
   protected wait(delayMs: number): Promise<void> {
@@ -651,7 +708,9 @@ export class CommandDispatcherService
   private async probeIotReadiness(attempt: number): Promise<void> {
     let healthy = false;
     try {
-      healthy = await this.iotServiceClient.isHealthy();
+      healthy = this.coreIotClient
+        ? await this.coreIotClient.isHealthy()
+        : await this.iotServiceClient.isHealthy();
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(`Unable to probe IoT Service health: ${message}`);
@@ -755,6 +814,8 @@ function toStartChargingCommand(command: DeviceCommand): StartChargingCommand {
   const sessionId = readString(payload, "sessionId");
   const stationCode = readString(payload, "stationCode");
   const connectorCode = readString(payload, "connectorCode");
+  const deviceId = readString(payload, "deviceId");
+  const relayId = readOptionalString(payload, "relayId") ?? relayIdFromEnvironment();
   const expiresAt = readString(payload, "expiresAt");
   const durationSeconds = payload.durationSeconds;
   const configVersion = payload.configVersion;
@@ -772,6 +833,8 @@ function toStartChargingCommand(command: DeviceCommand): StartChargingCommand {
     sessionId,
     stationCode,
     connectorCode,
+    deviceId,
+    relayId,
     durationSeconds,
     expiresAt,
     configVersion,
@@ -780,6 +843,9 @@ function toStartChargingCommand(command: DeviceCommand): StartChargingCommand {
 
 function toStopChargingCommand(command: DeviceCommand): StopChargingCommand {
   const sessionId = readString(command.payload, "sessionId", "stop");
+  const connectorCode = readString(command.payload, "connectorCode", "stop");
+  const deviceId = readString(command.payload, "deviceId", "stop");
+  const relayId = readString(command.payload, "relayId", "stop");
   const reason = command.payload.reason;
   if (reason !== "USER_REQUESTED" && reason !== "SYSTEM_REQUESTED") {
     throw new Error("Persisted device command has an invalid stop payload");
@@ -788,6 +854,9 @@ function toStopChargingCommand(command: DeviceCommand): StopChargingCommand {
   return {
     commandId: command.commandId,
     sessionId,
+    connectorCode,
+    deviceId,
+    relayId,
     reason,
   };
 }
@@ -804,6 +873,35 @@ function readString(
     );
   }
   return value;
+}
+
+function readOptionalString(
+  payload: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = payload[key];
+  return typeof value === "string" && value ? value : undefined;
+}
+
+function relayIdFromEnvironment(): string {
+  return process.env.IOT_CORE_RELAY_ID?.trim() || "relay-1";
+}
+
+function eventFor(
+  command: StartChargingCommand | StopChargingCommand,
+  type: "COMMAND_ACCEPTED" | "RUNNING" | "STOPPED",
+  payload: Record<string, unknown>,
+) {
+  return {
+    eventId: randomUUID(),
+    commandId: command.commandId,
+    sessionId: command.sessionId,
+    deviceId: command.deviceId,
+    connectorCode: command.connectorCode,
+    type,
+    occurredAt: new Date().toISOString(),
+    payload,
+  };
 }
 
 function isPositiveInteger(value: unknown): value is number {

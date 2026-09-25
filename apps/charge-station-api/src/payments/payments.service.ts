@@ -633,6 +633,7 @@ export class PaymentsService {
           stationCode: payment.order.connector.station.code,
           connectorCode: connector.code,
           deviceId: payment.order.connector.station.deviceId,
+          relayId: relayIdFromEnvironment(),
           sessionId: savedSession.id,
           durationSeconds: payment.order.durationMinutes * 60,
           expiresAt: savedSession.expectedEndAt!.toISOString(),
@@ -932,6 +933,7 @@ export class PaymentsService {
           stationCode: payment.order.connector.station.code,
           connectorCode: connector.code,
           deviceId: payment.order.connector.station.deviceId,
+          relayId: relayIdFromEnvironment(),
           sessionId: savedSession.id,
           durationSeconds: payment.order.durationMinutes * 60,
           expiresAt: savedSession.expectedEndAt!.toISOString(),
@@ -1171,6 +1173,10 @@ function paymentReservationTtlMinutes(): number {
   return Number.isFinite(configuredMinutes) && configuredMinutes > 0
     ? configuredMinutes
     : DEFAULT_PAYMENT_RESERVATION_TTL_MINUTES;
+}
+
+function relayIdFromEnvironment(): string {
+  return process.env.IOT_CORE_RELAY_ID?.trim() || "relay-1";
 }
 
 function cancellationRetryDelay(attempts: number): number {

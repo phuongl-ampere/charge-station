@@ -23,6 +23,8 @@ export interface StartChargingCommand {
   sessionId: string;
   stationCode: string;
   connectorCode: string;
+  deviceId: string;
+  relayId: string;
   durationSeconds: number;
   expiresAt: string;
   configVersion: number;
@@ -31,6 +33,9 @@ export interface StartChargingCommand {
 export interface StopChargingCommand {
   commandId: string;
   sessionId: string;
+  connectorCode: string;
+  deviceId: string;
+  relayId: string;
   reason: "USER_REQUESTED" | "SYSTEM_REQUESTED";
 }
 

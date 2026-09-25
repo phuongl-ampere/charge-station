@@ -381,7 +381,13 @@ describe("ChargingController", () => {
     expect(commandRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({
         commandType: "STOP_CHARGING",
-        payload: { sessionId: "ses_1", reason: "USER_REQUESTED" },
+        payload: {
+          sessionId: "ses_1",
+          connectorCode: "ST01-C01",
+          deviceId: "dev_ST01",
+          relayId: "relay-1",
+          reason: "USER_REQUESTED",
+        },
         status: DeviceCommandStatus.PENDING,
       }),
     );
@@ -480,6 +486,9 @@ describe("ChargingController", () => {
         commandType: "STOP_CHARGING",
         payload: {
           sessionId: session.id,
+          connectorCode: "ST01-C01",
+          deviceId: "dev_ST01",
+          relayId: "relay-1",
           reason: "SYSTEM_REQUESTED",
         },
         status: DeviceCommandStatus.PENDING,
@@ -533,6 +542,10 @@ function createStopHarness(
   const session = {
     id: "ses_1",
     status,
+    connector: {
+      code: "ST01-C01",
+      station: { deviceId: "dev_ST01" },
+    },
   } as ChargingSession;
   const commandRepository = {
     findOne: vi.fn().mockResolvedValue(null),

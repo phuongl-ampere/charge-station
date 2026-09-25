@@ -36,6 +36,15 @@ const MAX_COMMAND_TIMEOUT_MS = 60_000;
 const MAX_COMMAND_POLL_MS = 5_000;
 
 export class CoreIotClient {
+  async isHealthy(): Promise<boolean> {
+    try {
+      await this.requestJson("/api/v1/devices?limit=1", { method: "GET" }, "probe Core IoT");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async setRelay(input: CoreRelayCommand): Promise<CoreRelayResult> {
     const created = await this.requestJson(
       `/api/v1/devices/${encodeURIComponent(input.deviceId)}/commands`,
