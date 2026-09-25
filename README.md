@@ -16,11 +16,13 @@ pnpm tsx scripts/core-iot-local-e2e.ts
 ```
 
 The harness requires the approved isolated-Core credentials in its invoking
-environment; do not put them in this repository or a checked-in `.env` file.
+environment; do not put them in this repository or a checked-in `.env` file. It
+uses its own Compose project with API port `4100` and web port `3110`, so it can
+run alongside a manually started local stack.
 
-Open `http://localhost:3100/scan/ST01-C01`. The local mock checkout is served by the API and requires no PayOS account or external request.
+Open `http://127.0.0.1:3110/scan/ST01-C01`. The local mock checkout is served by the API and requires no PayOS account or external request.
 
-The operations console is at `http://localhost:3100/admin`. Compose seeds the
+The operations console is at `http://127.0.0.1:3110/admin`. Compose seeds the
 configured local admin account:
 
 ```text
@@ -36,7 +38,7 @@ then render its encrypted QR. Customer station URLs have the form
 `/scan/station/<opaque-token>` and do not reveal station or connector codes.
 Set a unique `STATION_QR_ENCRYPTION_KEY` for every non-local environment.
 
-| Service            | Local URL                                                             |
+| Service            | Manual Compose URL                                                    |
 | ------------------ | --------------------------------------------------------------------- |
 | Web                | `http://localhost:3100`                                               |
 | Charge Station API | `http://localhost:4000`                                               |

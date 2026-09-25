@@ -144,3 +144,23 @@ Review-fix verification completed without exposing credentials:
 The credential-gated live Core flow remains unexecuted in this shell because
 the required runtime credentials and access token are absent. No credential
 values, cookies, device identifiers, or temporary-secret paths were recorded.
+
+## Port-Isolation Follow-up
+
+Compose now parameterizes its API, web, and PostgreSQL host ports while keeping
+manual defaults at `4000`, `3100`, and `5432`. The API origin is used
+consistently for web build input, browser runtime input, PayOS mock checkout,
+PayOS return/cancel callbacks, and the harness API client. The web origin is
+used for `FRONTEND_URL`.
+
+The harness selects the isolated project
+`charge-station-core-iot-e2e` with API `4100`, web `3110`, and PostgreSQL
+`5433` by default. Validated host-port and project-name overrides are supported
+without inheriting the active user stack's Compose project. The harness does
+not stop or modify any existing Compose project.
+
+Verification: the focused harness suite passed 11 tests, the workspace unit
+suite passed 171 tests, formatting and diff validation passed, and Compose
+schema rendering passed with both default manual ports and synthetic overridden
+API, web, PostgreSQL, and origin values. No OAuth or credential-gated live
+operation was attempted in this follow-up.

@@ -32,6 +32,16 @@ The harness accepts only the two isolated `127.0.0.1` Core HTTP endpoints. It
 never prints credentials. It starts services with `docker compose up -d --build
 --wait` and intentionally does not run `docker compose down -v`.
 
+The harness uses the isolated Compose project `charge-station-core-iot-e2e`,
+API port `4100`, web port `3110`, and PostgreSQL port `5433` by default,
+leaving the manual Compose defaults (`4000`, `3100`, and `5432`) free. Set
+`CHARGE_STATION_API_HOST_PORT`, `CHARGE_STATION_WEB_HOST_PORT`,
+`CHARGE_STATION_POSTGRES_HOST_PORT`, and
+`CHARGE_STATION_COMPOSE_PROJECT_NAME` in the invoking environment to use
+different local values. `CHARGE_STATION_API_URL` may instead select a local
+`http://127.0.0.1:<port>` or `http://localhost:<port>` API origin; the harness
+uses that same origin for Compose and local checkout validation.
+
 For a manual Compose start, provide both `IOT_CORE_DEVICE_ID` and
 `IOT_CORE_DEVICE_TOKEN` from your approved local Core workflow. The token is a
 runtime secret and must not be copied into `.env.example` or source control.
@@ -53,8 +63,9 @@ Pending persisted commands are scheduled asynchronously only after API health.
 
 The API sends two-way REST commands to Core and monitors Core telemetry. The
 `core-iot-device-simulator` sidecar handles Core MQTT relay RPC and publishes
-telemetry. The web build uses `http://localhost:4000`, because that URL is
-resolved by the browser, not by the container.
+telemetry. The web build uses the configured `CHARGE_STATION_API_ORIGIN`
+(default `http://127.0.0.1:4000`), because that URL is resolved by the browser,
+not by the container.
 
 Open `http://localhost:3100/scan/ST01-C01` to create a local order. With `PAYOS_MODE=mock`, checkout is an API-hosted local page and no external PayOS request is made.
 

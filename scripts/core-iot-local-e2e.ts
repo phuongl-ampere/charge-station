@@ -5,7 +5,10 @@ import { join } from "node:path";
 
 const ISOLATED_CORE_PUBLIC_URL = "http://127.0.0.1:18090";
 const ISOLATED_CORE_MANAGEMENT_URL = "http://127.0.0.1:18091";
-const DEFAULT_API_URL = "http://127.0.0.1:4000";
+const DEFAULT_HARNESS_API_PORT = 4100;
+const DEFAULT_HARNESS_WEB_PORT = 3110;
+const DEFAULT_HARNESS_POSTGRES_PORT = 5433;
+const DEFAULT_HARNESS_COMPOSE_PROJECT = "charge-station-core-iot-e2e";
 const DEFAULT_TENANT_SLUG = "tenant1";
 const DEFAULT_USER_NAME = "user-a";
 const DEFAULT_DEVICE_NAME = "Charge Station Simulator";
@@ -18,6 +21,13 @@ const TELEMETRY_FRESHNESS_MS = 15_000;
 export interface IsolatedCoreUrls {
   publicUrl: URL;
   managementUrl: URL;
+}
+
+export interface IsolatedChargeStationRuntime {
+  apiUrl: URL;
+  webUrl: URL;
+  postgresHostPort: number;
+  composeProjectName: string;
 }
 
 interface ManagementSession {
@@ -72,6 +82,33 @@ export function isolatedCoreUrls(
       ISOLATED_CORE_MANAGEMENT_URL,
       "CORE_IOT_MANAGEMENT_URL",
     ),
+  };
+}
+
+export function isolatedChargeStationRuntime(
+  environment: NodeJS.ProcessEnv = process.env,
+): IsolatedChargeStationRuntime {
+  return {
+    apiUrl: localHttpUrl(
+      environment.CHARGE_STATION_API_URL,
+      environment.CHARGE_STATION_API_HOST_PORT,
+      DEFAULT_HARNESS_API_PORT,
+      "CHARGE_STATION_API_URL",
+      "CHARGE_STATION_API_HOST_PORT",
+    ),
+    webUrl: localHttpUrl(
+      environment.CHARGE_STATION_WEB_ORIGIN,
+      environment.CHARGE_STATION_WEB_HOST_PORT,
+      DEFAULT_HARNESS_WEB_PORT,
+      "CHARGE_STATION_WEB_ORIGIN",
+      "CHARGE_STATION_WEB_HOST_PORT",
+    ),
+    postgresHostPort:
+      optionalPort(
+        environment.CHARGE_STATION_POSTGRES_HOST_PORT,
+        "CHARGE_STATION_POSTGRES_HOST_PORT",
+      ) ?? DEFAULT_HARNESS_POSTGRES_PORT,
+    composeProjectName: composeProjectName(environment),
   };
 }
 
@@ -218,6 +255,7 @@ export async function ensureDevice(
 
 export async function run(): Promise<void> {
   const urls = isolatedCoreUrls();
+  const runtime = isolatedChargeStationRuntime();
   const tenant = await ensureTenant({
     slug: process.env.CORE_TENANT_SLUG?.trim() || DEFAULT_TENANT_SLUG,
     password: requiredEnvironment("CORE_TENANT_PASSWORD"),
@@ -234,7 +272,7 @@ export async function run(): Promise<void> {
     device.token,
   );
   try {
-    await runCompose(runtimeSecrets.envFile);
+    await runCompose(runtimeSecrets.envFile, runtime);
   } finally {
     await runtimeSecrets.dispose();
   }
@@ -243,7 +281,7 @@ export async function run(): Promise<void> {
     urls.publicUrl,
     requiredEnvironment("IOT_CORE_ACCESS_TOKEN"),
   );
-  const api = new ChargeStationApi(apiUrl());
+  const api = new ChargeStationApi(runtime.apiUrl);
   await waitFor(() => core.latestTelemetry(device.id));
   const order = await api.createAndPayLocalOrder("ST01-C01", 60);
   await waitFor(async () => {
@@ -558,19 +596,64 @@ function exactIsolatedUrl(value: string, expected: string, name: string): URL {
   return candidate;
 }
 
-function apiUrl(): URL {
-  const configured = process.env.CHARGE_STATION_API_URL ?? DEFAULT_API_URL;
+function localHttpUrl(
+  origin: string | undefined,
+  port: string | undefined,
+  defaultPort: number,
+  originName: string,
+  portName: string,
+): URL {
+  const configuredPort = optionalPort(port, portName);
+  if (!origin?.trim()) {
+    return new URL(`http://127.0.0.1:${configuredPort ?? defaultPort}`);
+  }
   try {
-    const url = new URL(configured);
-    if (url.protocol !== "http:" || url.username || url.password) {
+    const url = new URL(origin);
+    if (
+      url.protocol !== "http:" ||
+      (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") ||
+      !url.port ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    ) {
+      throw new Error();
+    }
+    if (configuredPort !== undefined && Number(url.port) !== configuredPort) {
       throw new Error();
     }
     return url;
   } catch {
+    throw new Error(`${originName} must be an absolute local HTTP URL`);
+  }
+}
+
+function optionalPort(
+  value: string | undefined,
+  name: string,
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const candidate = Number(value);
+  if (!Number.isInteger(candidate) || candidate < 1024 || candidate > 65_535) {
+    throw new Error(`${name} must be a local TCP port`);
+  }
+  return candidate;
+}
+
+function composeProjectName(environment: NodeJS.ProcessEnv): string {
+  const value =
+    environment.CHARGE_STATION_COMPOSE_PROJECT_NAME?.trim() ||
+    DEFAULT_HARNESS_COMPOSE_PROJECT;
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(value)) {
     throw new Error(
-      "CHARGE_STATION_API_URL must be an absolute local HTTP URL",
+      "CHARGE_STATION_COMPOSE_PROJECT_NAME must be a safe Compose project name",
     );
   }
+  return value;
 }
 
 function requiredEnvironment(name: string): string {
@@ -581,12 +664,15 @@ function requiredEnvironment(name: string): string {
   return value;
 }
 
-async function runCompose(secretEnvFile: string): Promise<void> {
+async function runCompose(
+  secretEnvFile: string,
+  runtime: IsolatedChargeStationRuntime,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(
       "docker",
       ["compose", "--env-file", secretEnvFile, "up", "-d", "--build", "--wait"],
-      { stdio: "inherit", env: composeEnvironment() },
+      { stdio: "inherit", env: composeEnvironment(runtime) },
     );
     child.once("error", () =>
       reject(new Error("Unable to start Docker Compose")),
@@ -599,13 +685,23 @@ async function runCompose(secretEnvFile: string): Promise<void> {
   });
 }
 
-function composeEnvironment(): NodeJS.ProcessEnv {
+function composeEnvironment(
+  runtime: IsolatedChargeStationRuntime,
+): NodeJS.ProcessEnv {
   const {
     IOT_CORE_DEVICE_ID: _deviceId,
     IOT_CORE_DEVICE_TOKEN: _deviceToken,
     ...environment
   } = process.env;
-  return environment;
+  return {
+    ...environment,
+    COMPOSE_PROJECT_NAME: runtime.composeProjectName,
+    CHARGE_STATION_API_HOST_PORT: runtime.apiUrl.port,
+    CHARGE_STATION_API_ORIGIN: runtime.apiUrl.origin,
+    CHARGE_STATION_WEB_HOST_PORT: runtime.webUrl.port,
+    CHARGE_STATION_WEB_ORIGIN: runtime.webUrl.origin,
+    CHARGE_STATION_POSTGRES_HOST_PORT: String(runtime.postgresHostPort),
+  };
 }
 
 async function waitFor<T>(

@@ -10,6 +10,7 @@ vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 
 import {
   ensureDevice,
+  isolatedChargeStationRuntime,
   isolatedCoreUrls,
   PublicCoreClient,
   run,
@@ -27,6 +28,11 @@ afterEach(() => {
   delete process.env.CORE_IOT_PUBLIC_URL;
   delete process.env.CORE_IOT_MANAGEMENT_URL;
   delete process.env.CHARGE_STATION_API_URL;
+  delete process.env.CHARGE_STATION_API_HOST_PORT;
+  delete process.env.CHARGE_STATION_WEB_HOST_PORT;
+  delete process.env.CHARGE_STATION_POSTGRES_HOST_PORT;
+  delete process.env.CHARGE_STATION_WEB_ORIGIN;
+  delete process.env.CHARGE_STATION_COMPOSE_PROJECT_NAME;
   spawnMock.mockReset();
   vi.unstubAllGlobals();
 });
@@ -39,6 +45,38 @@ describe("Core IoT local runtime", () => {
     expect(compose).not.toContain("MOCK_IOT_");
     expect(compose).toContain("IOT_CORE_PUBLIC_URL");
     expect(compose).toContain("core-iot-device-simulator:");
+    expect(compose).toContain("CHARGE_STATION_API_HOST_PORT:-4000");
+    expect(compose).toContain("CHARGE_STATION_WEB_HOST_PORT:-3100");
+    expect(compose).toContain("CHARGE_STATION_POSTGRES_HOST_PORT:-5432");
+    expect(compose).toContain(
+      "CHARGE_STATION_API_ORIGIN:-http://127.0.0.1:4000",
+    );
+    expect(compose).toContain(
+      "CHARGE_STATION_WEB_ORIGIN:-http://127.0.0.1:3100",
+    );
+  });
+
+  it("uses separate default ports and Compose project for the local Core harness", () => {
+    const runtime = isolatedChargeStationRuntime({});
+
+    expect(runtime.apiUrl.href).toBe("http://127.0.0.1:4100/");
+    expect(runtime.webUrl.href).toBe("http://127.0.0.1:3110/");
+    expect(runtime.postgresHostPort).toBe(5433);
+    expect(runtime.composeProjectName).toBe("charge-station-core-iot-e2e");
+  });
+
+  it("honors explicit local harness port and project overrides", () => {
+    const runtime = isolatedChargeStationRuntime({
+      CHARGE_STATION_API_HOST_PORT: "4200",
+      CHARGE_STATION_WEB_HOST_PORT: "3200",
+      CHARGE_STATION_POSTGRES_HOST_PORT: "5544",
+      CHARGE_STATION_COMPOSE_PROJECT_NAME: "charge-station-review-e2e",
+    });
+
+    expect(runtime.apiUrl.href).toBe("http://127.0.0.1:4200/");
+    expect(runtime.webUrl.href).toBe("http://127.0.0.1:3200/");
+    expect(runtime.postgresHostPort).toBe(5544);
+    expect(runtime.composeProjectName).toBe("charge-station-review-e2e");
   });
 
   it("rejects provisioning endpoints other than the isolated local Core", () => {
@@ -295,7 +333,7 @@ describe("Core IoT local runtime", () => {
           if (!next) throw new Error("Unexpected Core telemetry request");
           return jsonResponse(200, { items: [next] });
         }
-        if (url.origin === "http://127.0.0.1:4000") {
+        if (url.origin === "http://127.0.0.1:4100") {
           if (url.pathname === "/auth/login") {
             return jsonResponse(201, { accessToken: "admin-access-token" });
           }
@@ -321,7 +359,7 @@ describe("Core IoT local runtime", () => {
               realtimeAccessToken: "order-capability",
               payment: {
                 checkoutUrl:
-                  "http://127.0.0.1:4000/payments/payos/mock/order-1",
+                  "http://127.0.0.1:4100/payments/payos/mock/order-1",
               },
             });
           }
@@ -355,6 +393,14 @@ describe("Core IoT local runtime", () => {
     const spawnOptions = spawnMock.mock.calls[0]?.[2];
     expect(spawnOptions?.env).not.toHaveProperty("IOT_CORE_DEVICE_ID");
     expect(spawnOptions?.env).not.toHaveProperty("IOT_CORE_DEVICE_TOKEN");
+    expect(spawnOptions?.env).toMatchObject({
+      COMPOSE_PROJECT_NAME: "charge-station-core-iot-e2e",
+      CHARGE_STATION_API_HOST_PORT: "4100",
+      CHARGE_STATION_API_ORIGIN: "http://127.0.0.1:4100",
+      CHARGE_STATION_WEB_HOST_PORT: "3110",
+      CHARGE_STATION_WEB_ORIGIN: "http://127.0.0.1:3110",
+      CHARGE_STATION_POSTGRES_HOST_PORT: "5433",
+    });
     expect(fetchMock).toHaveBeenCalledWith(
       expect.objectContaining({ pathname: "/admin/stations" }),
       expect.objectContaining({
