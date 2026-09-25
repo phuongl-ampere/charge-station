@@ -78,3 +78,25 @@ class ChargeDeviceStateTests(unittest.TestCase):
         )
 
         self.assertFalse(response["ok"])
+
+    def test_unknown_relay_id_is_rejected_without_changing_state(self) -> None:
+        state = ChargeDeviceState()
+
+        response = handle_rpc(
+            {
+                "id": "command-1",
+                "method": "setRelay",
+                "mode": "two_way",
+                "params": {
+                    "relayId": "relay-unknown",
+                    "enabled": True,
+                    "durationSeconds": 60,
+                    "sessionId": "session-1",
+                },
+            },
+            state,
+            now=100.0,
+        )
+
+        self.assertFalse(response["ok"])
+        self.assertFalse(state.sample(now=100.0)["relay_state"])

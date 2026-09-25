@@ -14,6 +14,7 @@ RPC_REQUEST_TOPIC = "v1/devices/me/rpc/request/+"
 RPC_RESPONSE_TOPIC = "v1/devices/me/rpc/response/{}"
 TELEMETRY_TOPIC = "v1/devices/me/telemetry"
 DEVICE_TOKEN_USERNAME = "iotd_device_token"
+RELAY_ID = "relay-1"
 
 
 def handle_rpc(
@@ -28,7 +29,7 @@ def handle_rpc(
 
     relay_id = params.get("relayId")
     enabled = params.get("enabled")
-    if not isinstance(relay_id, str) or not relay_id or not isinstance(enabled, bool):
+    if relay_id != RELAY_ID or not isinstance(enabled, bool):
         return {"ok": False, "error": "invalid relay command"}
 
     duration_seconds = params.get("durationSeconds")
