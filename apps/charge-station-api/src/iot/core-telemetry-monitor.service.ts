@@ -92,7 +92,10 @@ export class CoreTelemetryMonitor implements OnApplicationShutdown {
           occurredAt: sample.eventAt,
           payload: { remainingSeconds: sample.remainingSeconds },
         });
-      } else if (sample.lastStopReason === "TIMER_EXPIRED") {
+      } else if (
+        sample.relayState === false &&
+        sample.lastStopReason === "TIMER_EXPIRED"
+      ) {
         await this.events.handle({
           eventId: eventId(start, sample, "STOPPED"),
           commandId: start.commandId,
@@ -233,7 +236,8 @@ function envMilliseconds(
   if (!Number.isFinite(configured) || configured <= 0) {
     return fallback;
   }
-  return Math.min(Math.floor(configured), maximum);
+  const milliseconds = Math.floor(configured);
+  return milliseconds > 0 ? Math.min(milliseconds, maximum) : fallback;
 }
 
 function errorMessage(error: unknown): string {

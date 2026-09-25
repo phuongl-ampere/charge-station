@@ -299,4 +299,83 @@ describe("CoreTelemetryMonitor", () => {
 
     expect(clearIntervalSpy).toHaveBeenCalledWith(timer);
   });
+
+  it("does not stop a session from a timer-expired sample while the relay is on", async () => {
+    const session = {
+      id: "session-1",
+      status: ChargingSessionStatus.CHARGING,
+      lastDeviceEventAt: null,
+      operationalWarning: null,
+      connector: { code: "ST01-C01", station: { deviceId: "core-device" } },
+    } as ChargingSession;
+    const dataSource = {
+      getRepository: vi.fn((entity) => {
+        if (entity === ChargingSession) {
+          return { find: vi.fn().mockResolvedValue([session]) };
+        }
+        if (entity === DeviceCommand) {
+          return {
+            findOne: vi.fn().mockResolvedValue({
+              commandId: "start-command",
+              payload: { deviceId: "core-device", relayId: "relay-1" },
+              session,
+            } as DeviceCommand),
+          };
+        }
+        throw new Error("unexpected repository");
+      }),
+    };
+    const core = {
+      latestTelemetry: vi.fn().mockResolvedValue({
+        eventAt: new Date().toISOString(),
+        relayState: true,
+        sessionId: "session-1",
+        remainingSeconds: null,
+        lastStopReason: "TIMER_EXPIRED",
+        voltageV: 230,
+        currentA: 1,
+        powerW: 230,
+        energyKwh: 0.02,
+      }),
+    };
+    const events = { handle: vi.fn() };
+    const monitor = new CoreTelemetryMonitor(
+      dataSource as unknown as DataSource,
+      core as unknown as CoreIotClient,
+      events as unknown as DeviceEventsService,
+    );
+
+    await monitor.pollOnce();
+
+    expect(events.handle).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a positive polling default for a fractional interval", () => {
+    const priorInterval = process.env.IOT_CORE_TELEMETRY_POLL_MS;
+    process.env.IOT_CORE_TELEMETRY_POLL_MS = "0.5";
+    try {
+      const timer = { unref: vi.fn() } as unknown as ReturnType<
+        typeof setInterval
+      >;
+      const setIntervalSpy = vi
+        .spyOn(globalThis, "setInterval")
+        .mockReturnValue(timer);
+      const monitor = new CoreTelemetryMonitor(
+        {} as DataSource,
+        {} as CoreIotClient,
+        {} as DeviceEventsService,
+      );
+      vi.spyOn(monitor, "pollOnce").mockResolvedValue();
+
+      monitor.start();
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 15_000);
+    } finally {
+      if (priorInterval === undefined) {
+        delete process.env.IOT_CORE_TELEMETRY_POLL_MS;
+      } else {
+        process.env.IOT_CORE_TELEMETRY_POLL_MS = priorInterval;
+      }
+    }
+  });
 });
