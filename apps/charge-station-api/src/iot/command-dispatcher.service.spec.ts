@@ -13,11 +13,10 @@ import {
 } from "../database/data-source.js";
 import { CommandDispatcherService } from "./command-dispatcher.service.js";
 import {
-  IotCommandRejectedError,
-  IotServiceClient,
-  IotTransportError,
-} from "./iot-service.client.js";
-import { CoreIotClient } from "./core-iot.client.js";
+  CoreIotCommandRejectedError,
+  CoreIotTransportError,
+  CoreIotClient,
+} from "./core-iot.client.js";
 import { DeviceEventsService } from "./device-events.service.js";
 
 describe("CommandDispatcherService", () => {
@@ -32,25 +31,22 @@ describe("CommandDispatcherService", () => {
       getRepository: vi.fn().mockReturnValue(commandRepository),
     };
     const iotClient = {
-      start: vi.fn().mockResolvedValue(undefined),
+      setRelay: vi.fn().mockResolvedValue(undefined),
     };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
 
     await service.dispatch(command.commandId);
 
-    expect(iotClient.start).toHaveBeenCalledWith({
+    expect(iotClient.setRelay).toHaveBeenCalledWith({
       commandId: command.commandId,
-      sessionId: command.session.id,
-      stationCode: "ST01",
-      connectorCode: "ST01-C01",
       deviceId: "core-device",
       relayId: "relay-1",
+      enabled: true,
       durationSeconds: 7200,
-      expiresAt: command.payload.expiresAt,
-      configVersion: 1,
+      sessionId: command.session.id,
     });
     expect(command.status).toBe(DeviceCommandStatus.SENT);
     expect(commandRepository.update).toHaveBeenNthCalledWith(
@@ -82,7 +78,6 @@ describe("CommandDispatcherService", () => {
     const dataSource = {
       getRepository: vi.fn().mockReturnValue(commandRepository),
     };
-    const legacyClient = { start: vi.fn() };
     const core = {
       setRelay: vi.fn().mockResolvedValue({
         commandId: "core-command",
@@ -94,9 +89,8 @@ describe("CommandDispatcherService", () => {
     const events = { handle: vi.fn().mockResolvedValue({ accepted: true }) };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      legacyClient as unknown as IotServiceClient,
-      undefined,
       core as unknown as CoreIotClient,
+      undefined,
       events as unknown as DeviceEventsService,
     );
 
@@ -116,7 +110,6 @@ describe("CommandDispatcherService", () => {
       "COMMAND_ACCEPTED",
       "RUNNING",
     ]);
-    expect(legacyClient.start).not.toHaveBeenCalled();
   });
 
   it("does not overwrite an ACKED command when the device event wins after send", async () => {
@@ -139,11 +132,11 @@ describe("CommandDispatcherService", () => {
       getRepository: vi.fn().mockReturnValue(commandRepository),
     };
     const iotClient = {
-      start: vi.fn().mockResolvedValue(undefined),
+      setRelay: vi.fn().mockResolvedValue(undefined),
     };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
 
     await service.dispatch(command.commandId);
@@ -179,15 +172,15 @@ describe("CommandDispatcherService", () => {
     const dataSource = {
       getRepository: vi.fn().mockReturnValue(commandRepository),
     };
-    const iotClient = { start: vi.fn().mockResolvedValue(undefined) };
+    const iotClient = { setRelay: vi.fn().mockResolvedValue(undefined) };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
 
     await service.dispatch(command.commandId);
 
-    expect(iotClient.start).toHaveBeenCalledOnce();
+    expect(iotClient.setRelay).toHaveBeenCalledOnce();
     expect(command.status).toBe(DeviceCommandStatus.FAILED);
   });
 
@@ -206,15 +199,15 @@ describe("CommandDispatcherService", () => {
     const dataSource = {
       getRepository: vi.fn().mockReturnValue(commandRepository),
     };
-    const iotClient = { start: vi.fn().mockResolvedValue(undefined) };
+    const iotClient = { setRelay: vi.fn().mockResolvedValue(undefined) };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
 
     await service.dispatch(command.commandId);
 
-    expect(iotClient.start).toHaveBeenCalledOnce();
+    expect(iotClient.setRelay).toHaveBeenCalledOnce();
     expect(command.status).toBe(DeviceCommandStatus.SENT);
     expect(commandRepository.update).toHaveBeenCalledTimes(3);
     service.onApplicationShutdown();
@@ -240,25 +233,22 @@ describe("CommandDispatcherService", () => {
       getRepository: vi.fn().mockReturnValue(commandRepository),
     };
     const iotClient = {
-      start: vi.fn(),
+      setRelay: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
     };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
 
     await service.dispatch(command.commandId);
 
-    expect(iotClient.stop).toHaveBeenCalledWith({
+    expect(iotClient.setRelay).toHaveBeenCalledWith({
       commandId: command.commandId,
-      sessionId: "session_1",
-      connectorCode: "ST01-C01",
       deviceId: "core-device",
       relayId: "relay-1",
-      reason: "USER_REQUESTED",
+      enabled: false,
     });
-    expect(iotClient.start).not.toHaveBeenCalled();
     expect(command.status).toBe(DeviceCommandStatus.SENT);
   });
 
@@ -286,16 +276,16 @@ describe("CommandDispatcherService", () => {
       getRepository: vi.fn().mockReturnValue(commandRepository),
     };
     const iotClient = {
-      start: vi
+      setRelay: vi
         .fn()
-        .mockRejectedValueOnce(new IotTransportError("connection refused"))
-        .mockRejectedValueOnce(new IotTransportError("connection refused"))
-        .mockRejectedValueOnce(new IotTransportError("connection refused"))
+        .mockRejectedValueOnce(new CoreIotTransportError("connection refused"))
+        .mockRejectedValueOnce(new CoreIotTransportError("connection refused"))
+        .mockRejectedValueOnce(new CoreIotTransportError("connection refused"))
         .mockResolvedValue(undefined),
     };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-08T11:00:00.000Z"));
@@ -312,7 +302,7 @@ describe("CommandDispatcherService", () => {
       vi.useRealTimers();
     }
 
-    expect(iotClient.start).toHaveBeenCalledTimes(4);
+    expect(iotClient.setRelay).toHaveBeenCalledTimes(4);
     expect(wait).toHaveBeenNthCalledWith(1, 1_000);
     expect(wait).toHaveBeenNthCalledWith(2, 5_000);
     expect(wait).toHaveBeenNthCalledWith(3, 20_000);
@@ -343,7 +333,7 @@ describe("CommandDispatcherService", () => {
         status: DeviceCommandStatus.SENT,
       },
     ]);
-    expect(iotClient.start.mock.calls).toEqual([
+    expect(iotClient.setRelay.mock.calls).toEqual([
       [
         expect.objectContaining({
           commandId: command.commandId,
@@ -400,14 +390,14 @@ describe("CommandDispatcherService", () => {
       transaction: vi.fn(async (callback) => callback(manager)),
     };
     const iotClient = {
-      start: vi
+      setRelay: vi
         .fn()
-        .mockRejectedValue(new IotTransportError("connection refused")),
+        .mockRejectedValue(new CoreIotTransportError("connection refused")),
     };
     const gateway = { publishSession: vi.fn() };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
       gateway as never,
     );
     vi.useFakeTimers();
@@ -427,7 +417,7 @@ describe("CommandDispatcherService", () => {
       vi.useRealTimers();
     }
 
-    expect(iotClient.start).toHaveBeenCalledTimes(4);
+    expect(iotClient.setRelay).toHaveBeenCalledTimes(4);
     expect(wait).toHaveBeenNthCalledWith(1, 1_000);
     expect(wait).toHaveBeenNthCalledWith(2, 5_000);
     expect(wait).toHaveBeenNthCalledWith(3, 20_000);
@@ -456,7 +446,7 @@ describe("CommandDispatcherService", () => {
     };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      {} as IotServiceClient,
+      {} as CoreIotClient,
     );
 
     await expect(service.onApplicationBootstrap()).resolves.toBeUndefined();
@@ -478,11 +468,11 @@ describe("CommandDispatcherService", () => {
         .fn()
         .mockResolvedValueOnce(false)
         .mockResolvedValueOnce(true),
-      start: vi.fn().mockResolvedValue(undefined),
+      setRelay: vi.fn().mockResolvedValue(undefined),
     };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
 
     vi.useFakeTimers();
@@ -493,7 +483,7 @@ describe("CommandDispatcherService", () => {
       await Promise.resolve();
 
       expect(iotClient.isHealthy).toHaveBeenCalledTimes(1);
-      expect(iotClient.start).not.toHaveBeenCalled();
+      expect(iotClient.setRelay).not.toHaveBeenCalled();
       expect(command).toMatchObject({
         status: DeviceCommandStatus.PENDING,
         retryCount: 0,
@@ -504,7 +494,7 @@ describe("CommandDispatcherService", () => {
       await vi.advanceTimersByTimeAsync(250);
 
       expect(iotClient.isHealthy).toHaveBeenCalledTimes(2);
-      expect(iotClient.start).toHaveBeenCalledTimes(1);
+      expect(iotClient.setRelay).toHaveBeenCalledTimes(1);
       expect(command).toMatchObject({
         status: DeviceCommandStatus.SENT,
         retryCount: 0,
@@ -525,7 +515,7 @@ describe("CommandDispatcherService", () => {
     };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
     const dispatch = vi
       .spyOn(service, "dispatch")
@@ -566,7 +556,7 @@ describe("CommandDispatcherService", () => {
     };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
     const dispatch = vi.spyOn(service, "dispatch").mockResolvedValue(undefined);
     const readyDispatcher = service as unknown as {
@@ -623,11 +613,11 @@ describe("CommandDispatcherService", () => {
         .fn()
         .mockResolvedValueOnce(false)
         .mockResolvedValueOnce(true),
-      start: vi.fn().mockResolvedValue(undefined),
+      setRelay: vi.fn().mockResolvedValue(undefined),
     };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
     const readyDispatcher = service as unknown as {
       dispatchPendingAfterReady(): void;
@@ -643,13 +633,13 @@ describe("CommandDispatcherService", () => {
       expect(command.retryCount).toBe(0);
       expect(command.status).toBe(DeviceCommandStatus.PENDING);
       expect(commandRepository.find).not.toHaveBeenCalled();
-      expect(iotClient.start).not.toHaveBeenCalled();
+      expect(iotClient.setRelay).not.toHaveBeenCalled();
       expect(commandRepository.save).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(250);
 
       expect(iotClient.isHealthy).toHaveBeenCalledTimes(2);
-      expect(iotClient.start).toHaveBeenCalledTimes(1);
+      expect(iotClient.setRelay).toHaveBeenCalledTimes(1);
       expect(command.retryCount).toBe(0);
       expect(command.status).toBe(DeviceCommandStatus.SENT);
       expect(commandRepository.update).toHaveBeenCalledTimes(2);
@@ -678,11 +668,11 @@ describe("CommandDispatcherService", () => {
       getRepository: vi.fn().mockReturnValue(commandRepository),
     };
     const iotClient = {
-      start: vi.fn(),
+      setRelay: vi.fn(),
     };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
     const wait = vi.spyOn(service as never, "wait" as never);
 
@@ -690,7 +680,7 @@ describe("CommandDispatcherService", () => {
       "Persisted device command has an invalid start payload",
     );
 
-    expect(iotClient.start).not.toHaveBeenCalled();
+    expect(iotClient.setRelay).not.toHaveBeenCalled();
     expect(wait).not.toHaveBeenCalled();
     expect(command.retryCount).toBe(0);
     expect(command.status).toBe(DeviceCommandStatus.FAILED);
@@ -751,11 +741,11 @@ describe("CommandDispatcherService", () => {
         transaction: vi.fn(async (callback) => callback(manager)),
       };
       const iotClient = {
-        start: vi.fn(),
+        setRelay: vi.fn(),
       };
       const service = new CommandDispatcherService(
         dataSource as unknown as DataSource,
-        iotClient as unknown as IotServiceClient,
+        iotClient as unknown as CoreIotClient,
       );
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-09-08T11:00:00.000Z"));
@@ -774,7 +764,7 @@ describe("CommandDispatcherService", () => {
         vi.useRealTimers();
       }
 
-      expect(iotClient.start).not.toHaveBeenCalled();
+      expect(iotClient.setRelay).not.toHaveBeenCalled();
       expect(command.status).toBe(DeviceCommandStatus.FAILED);
       expect(command.session.status).toBe(ChargingSessionStatus.START_FAILED);
       expect(command.session.connector.status).toBe("AVAILABLE");
@@ -799,11 +789,11 @@ describe("CommandDispatcherService", () => {
       getRepository: vi.fn().mockReturnValue(commandRepository),
     };
     const iotClient = {
-      start: vi.fn(),
+      setRelay: vi.fn(),
     };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
     const wait = vi.spyOn(service as never, "wait" as never);
 
@@ -811,7 +801,7 @@ describe("CommandDispatcherService", () => {
       "Persisted device command has an invalid retry schedule",
     );
 
-    expect(iotClient.start).not.toHaveBeenCalled();
+    expect(iotClient.setRelay).not.toHaveBeenCalled();
     expect(wait).not.toHaveBeenCalled();
     expect(command.retryCount).toBe(1);
     expect(command.status).toBe(DeviceCommandStatus.FAILED);
@@ -855,23 +845,23 @@ describe("CommandDispatcherService", () => {
       transaction: vi.fn(async (callback) => callback(manager)),
     };
     const iotClient = {
-      start: vi
+      setRelay: vi
         .fn()
         .mockRejectedValue(
-          new IotCommandRejectedError("IoT Service rejected command"),
+          new CoreIotCommandRejectedError("Core IoT rejected command"),
         ),
     };
     const service = new CommandDispatcherService(
       dataSource as unknown as DataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
     const wait = vi.spyOn(service as never, "wait" as never);
 
     await expect(service.dispatch(command.commandId)).rejects.toThrow(
-      "IoT Service rejected command",
+      "Core IoT rejected command",
     );
 
-    expect(iotClient.start).toHaveBeenCalledTimes(1);
+    expect(iotClient.setRelay).toHaveBeenCalledTimes(1);
     expect(wait).not.toHaveBeenCalled();
     expect(command.retryCount).toBe(0);
     expect(command.status).toBe(DeviceCommandStatus.FAILED);

@@ -19,9 +19,9 @@ import {
 } from "../database/data-source.js";
 import { CommandDispatcherService } from "../iot/command-dispatcher.service.js";
 import {
-  IotServiceClient,
-  IotTransportError,
-} from "../iot/iot-service.client.js";
+  CoreIotClient,
+  CoreIotTransportError,
+} from "../iot/core-iot.client.js";
 import type { PayosClient } from "../payments/payos.client.js";
 import { PaymentsService } from "../payments/payments.service.js";
 import { ChargingService } from "./charging.service.js";
@@ -146,12 +146,12 @@ describe("Charging reliability with local PostgreSQL", () => {
         .fn()
         .mockResolvedValueOnce(false)
         .mockResolvedValueOnce(true),
-      start: vi.fn().mockResolvedValue(undefined),
+      setRelay: vi.fn().mockResolvedValue(undefined),
       stop: vi.fn(),
     };
     const dispatcher = new ImmediateCommandDispatcherService(
       dataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
     const service = new ChargingService(dataSource, dispatcher);
 
@@ -168,14 +168,14 @@ describe("Charging reliability with local PostgreSQL", () => {
           status: DeviceCommandStatus.PENDING,
         });
       expect(iotClient.isHealthy).toHaveBeenCalledTimes(1);
-      expect(iotClient.start).not.toHaveBeenCalled();
+      expect(iotClient.setRelay).not.toHaveBeenCalled();
       expect(pendingCommand).toMatchObject({
         retryCount: 0,
         nextAttemptAt: null,
       });
 
       await expect
-        .poll(() => iotClient.start.mock.calls.length, {
+        .poll(() => iotClient.setRelay.mock.calls.length, {
           interval: 10,
           timeout: 1_000,
         })
@@ -185,7 +185,7 @@ describe("Charging reliability with local PostgreSQL", () => {
         .getRepository(DeviceCommand)
         .findOneByOrFail({ id: pendingCommand.id });
       expect(iotClient.isHealthy).toHaveBeenCalledTimes(2);
-      expect(iotClient.start).toHaveBeenCalledTimes(1);
+      expect(iotClient.setRelay).toHaveBeenCalledTimes(1);
       expect(dispatchedCommand).toMatchObject({
         status: DeviceCommandStatus.SENT,
         retryCount: 0,
@@ -207,12 +207,12 @@ describe("Charging reliability with local PostgreSQL", () => {
         .fn()
         .mockResolvedValueOnce(false)
         .mockResolvedValueOnce(true),
-      start: vi.fn(),
+      setRelay: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
     };
     const dispatcher = new ImmediateCommandDispatcherService(
       dataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
     const service = new ChargingService(dataSource, dispatcher);
 
@@ -229,7 +229,7 @@ describe("Charging reliability with local PostgreSQL", () => {
           commandType: "STOP_CHARGING",
         });
       expect(iotClient.isHealthy).toHaveBeenCalledTimes(1);
-      expect(iotClient.stop).not.toHaveBeenCalled();
+      expect(iotClient.setRelay).not.toHaveBeenCalled();
       expect(pendingCommand).toMatchObject({
         status: DeviceCommandStatus.PENDING,
         retryCount: 0,
@@ -237,7 +237,7 @@ describe("Charging reliability with local PostgreSQL", () => {
       });
 
       await expect
-        .poll(() => iotClient.stop.mock.calls.length, {
+        .poll(() => iotClient.setRelay.mock.calls.length, {
           interval: 10,
           timeout: 1_000,
         })
@@ -255,11 +255,11 @@ describe("Charging reliability with local PostgreSQL", () => {
       DeviceCommandStatus.PENDING,
     );
     const dispatcher = new ImmediateCommandDispatcherService(dataSource, {
-      start: vi
+      setRelay: vi
         .fn()
-        .mockRejectedValue(new IotTransportError("connection refused")),
+        .mockRejectedValue(new CoreIotTransportError("connection refused")),
       stop: vi.fn(),
-    } as unknown as IotServiceClient);
+    } as unknown as CoreIotClient);
 
     await expect(
       dispatcher.dispatch(fixture.command.commandId),

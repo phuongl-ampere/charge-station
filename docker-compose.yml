@@ -36,9 +36,14 @@ services:
       ADMIN_PASSWORD: local-admin-password-change-me
       STATION_QR_ENCRYPTION_KEY: 4d8eae9b3271c5f079cfb8b4f14ba3ca9d7e6a0b4c32f807c2d2ab5e983f1140
       FRONTEND_URL: http://localhost:3100
-      CHARGE_STATION_API_URL: http://charge-station-api:4000
-      IOT_SERVICE_URL: http://iot-service:4001
-      SERVICE_TOKEN: local-service-token-change-me
+      IOT_CORE_PUBLIC_URL: http://host.docker.internal:18090
+      IOT_CORE_ACCESS_TOKEN: ${IOT_CORE_ACCESS_TOKEN:?Set IOT_CORE_ACCESS_TOKEN in the shell that starts Compose}
+      IOT_CORE_DEVICE_ID: ${IOT_CORE_DEVICE_ID:?Set IOT_CORE_DEVICE_ID in the shell that starts Compose}
+      IOT_CORE_RELAY_ID: ${IOT_CORE_RELAY_ID:-relay-1}
+      IOT_CORE_COMMAND_TIMEOUT_MS: ${IOT_CORE_COMMAND_TIMEOUT_MS:-10000}
+      IOT_CORE_COMMAND_POLL_MS: ${IOT_CORE_COMMAND_POLL_MS:-250}
+      IOT_CORE_TELEMETRY_POLL_MS: ${IOT_CORE_TELEMETRY_POLL_MS:-2000}
+      IOT_CORE_TELEMETRY_STALE_MS: ${IOT_CORE_TELEMETRY_STALE_MS:-15000}
       PAYOS_MODE: mock
       PAYOS_CLIENT_ID: local-client-id
       PAYOS_API_KEY: local-api-key
@@ -50,6 +55,8 @@ services:
       PAYMENT_REAPER_INTERVAL_MS: 60000
     ports:
       - "127.0.0.1:4000:4000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test:
         [
@@ -63,37 +70,16 @@ services:
       retries: 20
       start_period: 10s
 
-  iot-service:
+  core-iot-device-simulator:
     build:
-      context: .
-      args:
-        NEXT_PUBLIC_API_URL: http://localhost:4000
-    command: ["pnpm", "--filter", "@charge-station/iot-service", "start"]
-    depends_on:
-      charge-station-api:
-        condition: service_healthy
+      context: ./apps/core-iot-device-simulator
     environment:
-      CHARGE_STATION_API_URL: http://charge-station-api:4000
-      SERVICE_TOKEN: local-service-token-change-me
-      MOCK_IOT_START_DELAY_MS: 250
-      MOCK_IOT_HEARTBEAT_MS: 1000
-      MOCK_IOT_FAILURE_MODE: none
-      IOT_EVENT_JOURNAL_PATH: /var/lib/charge-station/iot-event-journal.json
-      IOT_EVENT_REQUEST_TIMEOUT_MS: 3000
-    volumes:
-      - charge-station-iot-events:/var/lib/charge-station
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:4001/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
-        ]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 5s
+      IOT_CORE_MQTT_HOST: host.docker.internal
+      IOT_CORE_MQTT_PORT: "18893"
+      IOT_CORE_DEVICE_TOKEN: ${IOT_CORE_DEVICE_TOKEN:?Run the Core E2E harness or set IOT_CORE_DEVICE_TOKEN in the shell that starts Compose}
+      IOT_SIMULATOR_TELEMETRY_INTERVAL_SECONDS: ${IOT_SIMULATOR_TELEMETRY_INTERVAL_SECONDS:-1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   web:
     build:
@@ -133,4 +119,3 @@ services:
 
 volumes:
   charge-station-postgres:
-  charge-station-iot-events:

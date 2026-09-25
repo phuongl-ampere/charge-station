@@ -18,7 +18,7 @@ import {
   Station,
 } from "../database/data-source.js";
 import { CommandDispatcherService } from "./command-dispatcher.service.js";
-import type { IotServiceClient } from "./iot-service.client.js";
+import type { CoreIotClient } from "./core-iot.client.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ??
@@ -128,18 +128,18 @@ describe("CommandDispatcherService claim concurrency with local PostgreSQL", () 
       releaseSend = resolve;
     });
     const iotClient = {
-      start: vi.fn(async () => {
+      setRelay: vi.fn(async () => {
         markStarted?.();
         await sendGate;
       }),
     };
     const first = new CommandDispatcherService(
       dataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
     const second = new CommandDispatcherService(
       dataSource,
-      iotClient as unknown as IotServiceClient,
+      iotClient as unknown as CoreIotClient,
     );
 
     const firstDispatch = first.dispatch(command.commandId);
@@ -147,7 +147,7 @@ describe("CommandDispatcherService claim concurrency with local PostgreSQL", () 
     const secondDispatch = second.dispatch(command.commandId);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(iotClient.start).toHaveBeenCalledTimes(1);
+    expect(iotClient.setRelay).toHaveBeenCalledTimes(1);
 
     releaseSend?.();
     await Promise.all([firstDispatch, secondDispatch]);

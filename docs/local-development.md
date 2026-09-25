@@ -4,27 +4,57 @@
 
 - Docker Desktop with Compose v2.
 - Node.js 22 and pnpm 9 for host-side tests and builds.
+- An already-running isolated Core at public `http://127.0.0.1:18090`,
+  management `http://127.0.0.1:18091`, and MQTT `127.0.0.1:18893`.
 
-The Compose stack is self-contained and local-only. Published ports bind to `127.0.0.1`; PostgreSQL, the API, and the web app are reachable from the host. IoT remains private to the Compose network.
+Published Charge Station ports bind to `127.0.0.1`. Core is external to this
+Compose project: the API reaches it through `host.docker.internal:18090` and
+the simulator reaches MQTT through `host.docker.internal:18893`.
 
 ## Start the stack
 
+Supply Core credentials through the invoking shell or a private process
+environment; do not put them in this repository, a Compose file, a cookie jar,
+or a checked-in `.env` file. The safe real-flow command reuses `tenant1`,
+`user-a`, and the configured isolated device, obtains the device MQTT token by
+API, writes it only into a temporary directory with mode `0700`, starts Compose,
+then removes that directory.
+
 ```sh
-docker compose up -d --wait
+export IOT_CORE_ACCESS_TOKEN='<delegated user token>'
+export IOT_CORE_DEVICE_ID='<isolated Core device id>'
+export CORE_TENANT_PASSWORD='<tenant1 password>'
+export CORE_USER_PASSWORD='<user-a password>'
+pnpm tsx scripts/core-iot-local-e2e.ts
 ```
 
-The API waits for PostgreSQL, runs its TypeORM migrations and idempotent demo seed, then starts. The seed creates station `ST01`, connector `ST01-C01`, and the 5,000 VND/hour pricing plan. API health becomes available when its HTTP listener is ready. Pending persisted IoT commands are scheduled asynchronously only after that point, so Compose can start IoT after API health without consuming command retries before IoT is available.
+The harness accepts only the two isolated `127.0.0.1` Core HTTP endpoints. It
+never prints credentials. It starts services with `docker compose up -d --build
+--wait` and intentionally does not run `docker compose down -v`.
+
+For a manual Compose start, additionally provide `IOT_CORE_DEVICE_TOKEN` from
+your approved local Core workflow. The token is a runtime secret and must not
+be copied into `.env.example` or source control.
+
+The API waits for PostgreSQL, runs its TypeORM migrations and idempotent demo
+seed, then starts. The seed creates station `ST01`, connector `ST01-C01`, and
+the 5,000 VND/hour pricing plan. When `IOT_CORE_DEVICE_ID` is set, every seed
+run updates `ST01` to that Core device ID, including an existing local database.
+Pending persisted commands are scheduled asynchronously only after API health.
 
 | Service            | URL or network name                                      |
 | ------------------ | -------------------------------------------------------- |
 | Web                | `http://localhost:3100`                                  |
 | Charge Station API | `http://localhost:4000`                                  |
 | API health         | `http://localhost:4000/health`                           |
-| IoT Service        | `http://iot-service:4001` inside Compose                 |
-| IoT health         | `http://iot-service:4001/health` inside Compose          |
+| Core public API    | `http://host.docker.internal:18090` from Compose         |
+| Core MQTT          | `host.docker.internal:18893` from the simulator          |
 | PostgreSQL         | `postgres://charge:charge@localhost:5432/charge_station` |
 
-The API calls IoT at `http://iot-service:4001`; IoT posts device events to `http://charge-station-api:4000`. The web build uses `http://localhost:4000`, because that URL is resolved by the browser, not by the container.
+The API sends two-way REST commands to Core and monitors Core telemetry. The
+`core-iot-device-simulator` sidecar handles Core MQTT relay RPC and publishes
+telemetry. The web build uses `http://localhost:4000`, because that URL is
+resolved by the browser, not by the container.
 
 Open `http://localhost:3100/scan/ST01-C01` to create a local order. With `PAYOS_MODE=mock`, checkout is an API-hosted local page and no external PayOS request is made.
 
@@ -39,15 +69,11 @@ Stop the stack:
 docker compose down
 ```
 
-Reset the database:
-
-```sh
-docker compose down -v
-```
-
 ## Environment
 
-Copy `.env.example` when running individual services on the host. It defines host-local URLs. Compose intentionally sets its own database and internal service destinations so that service-to-service calls use Docker DNS names.
+Copy `.env.example` when running individual services on the host. It contains
+only placeholders for Core credentials. Compose intentionally sets its own
+database destination and Core host bridge URL.
 
 Local defaults:
 
@@ -55,17 +81,19 @@ Local defaults:
 PAYOS_MODE=mock
 PAYOS_MOCK_CHECKOUT_BASE_URL=http://localhost:4000
 PAYOS_CHECKSUM_KEY=local-checksum-key
-MOCK_IOT_FAILURE_MODE=none
 PAYMENT_RESERVATION_TTL_MINUTES=15
 PAYMENT_REAPER_INTERVAL_MS=60000
 ADMIN_EMAIL=admin@charge.local
 ADMIN_PASSWORD=local-admin-password-change-me
 STATION_QR_ENCRYPTION_KEY=<64-character-hex-key>
-IOT_EVENT_JOURNAL_PATH=./data/iot-event-journal.json
-IOT_EVENT_REQUEST_TIMEOUT_MS=3000
+IOT_CORE_PUBLIC_URL=http://127.0.0.1:18090
+IOT_CORE_ACCESS_TOKEN=<delegated-user-access-token>
+IOT_CORE_DEVICE_ID=<isolated-core-device-id>
+IOT_CORE_DEVICE_TOKEN=<isolated-core-device-token>
 ```
 
-The mock IoT service accepts `MOCK_IOT_FAILURE_MODE=timeout`, `offline`, or `command_failed` to exercise command failure paths. `MOCK_IOT_START_DELAY_MS` and `MOCK_IOT_HEARTBEAT_MS` control the mock timing. Change an environment value in `docker-compose.yml`, then recreate the affected service.
+`IOT_CORE_ACCESS_TOKEN` and `IOT_CORE_DEVICE_TOKEN` are credentials. Keep them
+out of terminal history, logs, committed files, and persistent cookie jars.
 
 ## Station QR Management
 
@@ -82,7 +110,9 @@ tokens. It must be a unique 64-character hexadecimal key in each environment.
 Use **Rotate QR** only when old printed QR codes must stop working: it changes
 the station QR version and all older tokens return `404`.
 
-`COMMAND_ACCEPTED`, `RUNNING`, `STOPPED`, `COMMAND_FAILED`, and `DEVICE_OFFLINE` callbacks are appended to the local JSON journal before delivery. The journal preserves event ID, payload, per-session sequence, retry count, and delivery state; undelivered events replay after an IoT restart. `IOT_EVENT_JOURNAL_PATH` defaults to `./data/iot-event-journal.json`. Compose mounts that path on the `charge-station-iot-events` named volume. Callback requests use `IOT_EVENT_REQUEST_TIMEOUT_MS` (3 seconds by default), retry after 100 ms, 500 ms, then a capped 1 second interval, and clear retry timers on shutdown. Heartbeats remain best effort.
+After Core confirms a relay command, the API records the corresponding charging
+state transition and the telemetry monitor updates live station measurements.
+Core remains the source of truth for relay state and timer expiry.
 
 `PAYMENT_RESERVATION_TTL_MINUTES` controls how long a newly created pending payment reserves its connector. The API starts a non-blocking reaper after its listener is ready. It claims overdue reservations, persists cancellation attempts, and only releases the connector after cancellation succeeds or PayOS definitively reports cancellation or expiry. Failed cancellation attempts remain reserved and retry with bounded backoff. `PAYMENT_REAPER_INTERVAL_MS` controls its scan interval.
 
@@ -159,8 +189,7 @@ https://<public-api-host>/payments/payos/webhook
 ```
 
 PayOS cannot reach `localhost`. Use a temporary HTTPS tunnel or a
-non-production deployed API host for sandbox callbacks. Keep the local mock
-IoT Service enabled while validating sandbox checkout. The signed webhook
+non-production deployed API host for sandbox callbacks. The signed webhook
 remains the only path that can start charging.
 
 ## PayOS Production Configuration
@@ -188,12 +217,11 @@ fragment, so the capability is not placed in a query string or referrer.
 ## Verification
 
 ```sh
-docker compose up -d --wait
+pnpm tsx scripts/core-iot-local-e2e.ts
 pnpm test
 pnpm build
 pnpm --filter @charge-station/api test:e2e
 pnpm --filter @charge-station/api test:postgres
-pnpm --filter @charge-station/iot-service test:e2e
 pnpm --filter @charge-station/web playwright test
 docker compose down
 ```

@@ -26,11 +26,6 @@ import {
 } from "../database/data-source.js";
 import { ChargeGateway } from "../realtime/charge.gateway.js";
 import {
-  IotCommandRejectedError,
-  IotServiceClient,
-  IotTransportError,
-} from "./iot-service.client.js";
-import {
   CoreIotClient,
   CoreIotCommandRejectedError,
   CoreIotTransportError,
@@ -70,12 +65,10 @@ export class CommandDispatcherService
 
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
-    private readonly iotServiceClient: IotServiceClient,
+    private readonly coreIotClient: CoreIotClient,
     @Optional()
     @Inject(ChargeGateway)
     private readonly gateway?: ChargeGateway,
-    @Optional()
-    private readonly coreIotClient?: CoreIotClient,
     @Optional()
     private readonly deviceEventsService?: DeviceEventsService,
   ) {}
@@ -248,10 +241,7 @@ export class CommandDispatcherService
       this.clearClaimRecovery(command.commandId, claim.token);
       return;
     } catch (error: unknown) {
-      if (
-        error instanceof IotTransportError ||
-        error instanceof CoreIotTransportError
-      ) {
+      if (error instanceof CoreIotTransportError) {
         if (
           !Number.isInteger(command.retryCount) ||
           command.retryCount < 0 ||
@@ -288,8 +278,7 @@ export class CommandDispatcherService
       }
 
       if (
-        (error instanceof IotCommandRejectedError ||
-          error instanceof CoreIotCommandRejectedError) &&
+        error instanceof CoreIotCommandRejectedError &&
         command.commandType === "START_CHARGING"
       ) {
         await this.markDefinitiveStartFailure(
@@ -308,26 +297,18 @@ export class CommandDispatcherService
   private async send(
     command: StartChargingCommand | StopChargingCommand,
   ): Promise<void> {
-    if (this.coreIotClient) {
-      await this.sendThroughCore(command);
-      return;
-    }
-    if ("durationSeconds" in command) {
-      await this.iotServiceClient.start(command);
-      return;
-    }
-    await this.iotServiceClient.stop(command);
+    await this.sendThroughCore(command);
   }
 
   private async sendThroughCore(
     command: StartChargingCommand | StopChargingCommand,
   ): Promise<void> {
-    const result = await this.coreIotClient!.setRelay({
+    const result = await this.coreIotClient.setRelay({
       commandId: command.commandId,
       deviceId: command.deviceId,
       relayId: command.relayId,
       enabled: "durationSeconds" in command,
-      ...( "durationSeconds" in command
+      ...("durationSeconds" in command
         ? {
             durationSeconds: command.durationSeconds,
             sessionId: command.sessionId,
@@ -344,8 +325,7 @@ export class CommandDispatcherService
       await this.deviceEventsService.handle(
         eventFor(command, "RUNNING", {
           relayState: "ON",
-          remainingSeconds:
-            result.remainingSeconds ?? command.durationSeconds,
+          remainingSeconds: result.remainingSeconds ?? command.durationSeconds,
         }),
       );
       return;
@@ -708,12 +688,10 @@ export class CommandDispatcherService
   private async probeIotReadiness(attempt: number): Promise<void> {
     let healthy = false;
     try {
-      healthy = this.coreIotClient
-        ? await this.coreIotClient.isHealthy()
-        : await this.iotServiceClient.isHealthy();
+      healthy = await this.coreIotClient.isHealthy();
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`Unable to probe IoT Service health: ${message}`);
+      this.logger.warn(`Unable to probe Core IoT health: ${message}`);
     }
 
     if (!healthy) {
@@ -815,7 +793,8 @@ function toStartChargingCommand(command: DeviceCommand): StartChargingCommand {
   const stationCode = readString(payload, "stationCode");
   const connectorCode = readString(payload, "connectorCode");
   const deviceId = readString(payload, "deviceId");
-  const relayId = readOptionalString(payload, "relayId") ?? relayIdFromEnvironment();
+  const relayId =
+    readOptionalString(payload, "relayId") ?? relayIdFromEnvironment();
   const expiresAt = readString(payload, "expiresAt");
   const durationSeconds = payload.durationSeconds;
   const configVersion = payload.configVersion;

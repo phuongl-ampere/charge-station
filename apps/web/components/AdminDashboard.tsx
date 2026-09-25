@@ -54,11 +54,7 @@ type AdminOperationsApi = Pick<
 >;
 
 type DashboardTab =
-  | "overview"
-  | "stations"
-  | "sessions"
-  | "payments"
-  | "devices";
+  "overview" | "stations" | "sessions" | "payments" | "devices";
 
 type AdminDashboardProps = {
   accessToken: string;
@@ -103,14 +99,19 @@ export function AdminDashboard({
     async (showRefresh = false) => {
       if (showRefresh) setRefreshing(true);
       try {
-        const [nextOverview, nextStations, nextSessions, nextPayments, nextTimeline] =
-          await Promise.all([
-            api.getOverview(accessToken),
-            api.getStations(accessToken),
-            api.getSessions(accessToken),
-            api.getPayments(accessToken),
-            api.getDeviceTimeline(accessToken),
-          ]);
+        const [
+          nextOverview,
+          nextStations,
+          nextSessions,
+          nextPayments,
+          nextTimeline,
+        ] = await Promise.all([
+          api.getOverview(accessToken),
+          api.getStations(accessToken),
+          api.getSessions(accessToken),
+          api.getPayments(accessToken),
+          api.getDeviceTimeline(accessToken),
+        ]);
         setOverview(nextOverview);
         setStations(nextStations);
         setSessions(nextSessions);
@@ -395,7 +396,9 @@ function OverviewPanel({
           label="Needs attention"
           note={`${overview.connectors.offline} connector offline`}
           tone="coral"
-          value={String(overview.sessions.attention + overview.connectors.offline)}
+          value={String(
+            overview.sessions.attention + overview.connectors.offline,
+          )}
         />
       </section>
 
@@ -405,7 +408,11 @@ function OverviewPanel({
             <p className="eyebrow">Operational queue</p>
             <h2 id="attention-heading">Needs attention</h2>
           </div>
-          <button className="admin-text-button" onClick={onStations} type="button">
+          <button
+            className="admin-text-button"
+            onClick={onStations}
+            type="button"
+          >
             Open stations
           </button>
         </div>
@@ -454,7 +461,9 @@ function StationsPanel({
           <h2 id="stations-heading">Stations and connectors</h2>
         </div>
         <div className="admin-station-actions">
-          <span className="admin-section-count">{stations.length} stations</span>
+          <span className="admin-section-count">
+            {stations.length} stations
+          </span>
           <button
             className="admin-add-station"
             onClick={onCreateStation}
@@ -515,7 +524,9 @@ function StationsPanel({
                       </div>
                       <SessionAction
                         onCommand={onCommand}
-                        pending={commandSessionId === connector.activeSession.id}
+                        pending={
+                          commandSessionId === connector.activeSession.id
+                        }
                         session={connector.activeSession}
                       />
                     </>
@@ -558,7 +569,10 @@ function StationTelemetry({
   }
 
   return (
-    <section aria-label="Live meter telemetry" className="admin-telemetry-strip">
+    <section
+      aria-label="Live meter telemetry"
+      className="admin-telemetry-strip"
+    >
       <div className="admin-telemetry-meta">
         <span
           className={
@@ -588,10 +602,7 @@ function StationTelemetry({
           label="Amp"
           value={formatCurrent(telemetry.currentA)}
         />
-        <TelemetryReading
-          label="Power"
-          value={formatPower(telemetry.powerW)}
-        />
+        <TelemetryReading label="Power" value={formatPower(telemetry.powerW)} />
         <TelemetryReading
           label="Energy"
           value={formatEnergy(telemetry.energyKwh)}
@@ -623,10 +634,7 @@ function CreateStationDialog({
   open: boolean;
   submitting: boolean;
   onClose: () => void;
-  onCreate: (input: {
-    code: string;
-    deviceId?: string;
-  }) => void;
+  onCreate: (input: { code: string; deviceId?: string }) => void;
 }) {
   const [code, setCode] = useState("");
   const [deviceId, setDeviceId] = useState("");
@@ -837,7 +845,9 @@ function SessionsPanel({
                 <small>{session.stationName}</small>
               </td>
               <td>
-                <span className={`admin-status is-${session.status.toLowerCase()}`}>
+                <span
+                  className={`admin-status is-${session.status.toLowerCase()}`}
+                >
                   {session.status}
                 </span>
               </td>
@@ -898,7 +908,9 @@ function PaymentsPanel({ payments }: { payments: AdminPayment[] }) {
               <td>{payment.connectorCode}</td>
               <td>{formatVnd(payment.amountVnd)}</td>
               <td>
-                <span className={`admin-status is-${payment.status.toLowerCase()}`}>
+                <span
+                  className={`admin-status is-${payment.status.toLowerCase()}`}
+                >
                   {payment.status}
                 </span>
               </td>
@@ -924,7 +936,7 @@ function DeviceTimelinePanel({
     <section className="admin-section" aria-labelledby="timeline-heading">
       <div className="admin-section-heading">
         <div>
-          <p className="eyebrow">Command and event journal</p>
+          <p className="eyebrow">Command and event activity</p>
           <h2 id="timeline-heading">Device activity</h2>
         </div>
         <span className="admin-section-count">{timeline.length} latest</span>
@@ -932,7 +944,9 @@ function DeviceTimelinePanel({
       <div className="admin-timeline">
         {timeline.map((item) => (
           <div className="admin-timeline-row" key={`${item.kind}:${item.id}`}>
-            <span className={`admin-timeline-kind is-${item.kind.toLowerCase()}`}>
+            <span
+              className={`admin-timeline-kind is-${item.kind.toLowerCase()}`}
+            >
               {item.kind}
             </span>
             <strong>{item.type}</strong>
@@ -942,7 +956,10 @@ function DeviceTimelinePanel({
           </div>
         ))}
         {!timeline.length ? (
-          <EmptyState icon={ServerCog} message="No device commands or events yet" />
+          <EmptyState
+            icon={ServerCog}
+            message="No device commands or events yet"
+          />
         ) : null}
       </div>
     </section>
@@ -1080,8 +1097,7 @@ function formatDateTime(value: string | null): string {
     minute: "2-digit",
     month: "short",
     timeZone: "Asia/Ho_Chi_Minh",
-  })
-    .formatToParts(date);
+  }).formatToParts(date);
   const part = (type: Intl.DateTimeFormatPartTypes): string =>
     parts.find((candidate) => candidate.type === type)?.value ?? "";
   return `${part("day")} ${part("month")}, ${part("hour")}:${part("minute")}`;

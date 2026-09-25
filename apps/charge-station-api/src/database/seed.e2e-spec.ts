@@ -86,4 +86,30 @@ describe("database seed lifecycle", () => {
     expect(await dataSource.getRepository(PricingPlan).count()).toBe(1);
     expect(await dataSource.getRepository(Connector).count()).toBe(1);
   });
+
+  it("updates the existing ST01 mapping from IOT_CORE_DEVICE_ID", async () => {
+    const mappingDataSource = createPgMemDataSource();
+    const priorDeviceId = process.env.IOT_CORE_DEVICE_ID;
+    try {
+      await seedDatabase(mappingDataSource);
+      process.env.IOT_CORE_DEVICE_ID = "isolated-core-device";
+      await seedDatabase(mappingDataSource);
+      await mappingDataSource.initialize();
+
+      await expect(
+        mappingDataSource
+          .getRepository(Station)
+          .findOneByOrFail({ code: "ST01" }),
+      ).resolves.toMatchObject({ deviceId: "isolated-core-device" });
+    } finally {
+      if (priorDeviceId === undefined) {
+        delete process.env.IOT_CORE_DEVICE_ID;
+      } else {
+        process.env.IOT_CORE_DEVICE_ID = priorDeviceId;
+      }
+      if (mappingDataSource.isInitialized) {
+        await mappingDataSource.destroy();
+      }
+    }
+  });
 });

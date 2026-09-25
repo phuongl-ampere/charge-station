@@ -2,6 +2,7 @@
   "name": "charge-station",
   "private": true,
   "version": "0.1.0",
+  "type": "module",
   "packageManager": "pnpm@9.15.5",
   "engines": {
     "node": ">=22 <27"
@@ -13,7 +14,10 @@
     "format": "prettier --check ."
   },
   "devDependencies": {
+    "@types/node": "^22.10.2",
     "prettier": "^3.4.2",
-    "typescript": "^5.7.3"
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
   }
 }
