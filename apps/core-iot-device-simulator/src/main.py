@@ -70,33 +70,28 @@ def _mqtt_operation_succeeded(result: Any) -> bool:
         return isinstance(value, int) and not isinstance(value, bool) and value == 0
 
 
-def run() -> None:
-    import paho.mqtt.client as mqtt
+def start_mqtt_client(client: Any, *, host: str, port: int) -> None:
+    client.reconnect_delay_set(min_delay=1, max_delay=30)
+    client.connect_async(host, port, keepalive=60)
+    client.loop_start()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    host = os.environ["IOT_CORE_MQTT_HOST"]
-    port = int(os.environ["IOT_CORE_MQTT_PORT"])
-    device_token = os.environ["IOT_CORE_DEVICE_TOKEN"]
-    telemetry_interval_seconds = float(
-        os.environ["IOT_SIMULATOR_TELEMETRY_INTERVAL_SECONDS"]
-    )
-    if telemetry_interval_seconds <= 0:
-        raise ValueError("IOT_SIMULATOR_TELEMETRY_INTERVAL_SECONDS must be positive")
 
-    readiness = RpcSubscriptionReadiness(
-        Path(
-            os.environ.get(
-                "IOT_SIMULATOR_READINESS_FILE", "/tmp/core-iot-device-simulator.ready"
-            )
-        )
-    )
-    state = ChargeDeviceState()
-    state_lock = threading.Lock()
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    client.username_pw_set(DEVICE_TOKEN_USERNAME, device_token)
+def configure_mqtt_callbacks(
+    client: Any,
+    readiness: RpcSubscriptionReadiness,
+    state: ChargeDeviceState,
+    state_lock: Any | None = None,
+) -> None:
+    state_lock = state_lock or threading.Lock()
     response_publish_command_ids: dict[int, str] = {}
 
-    def on_connect(client: Any, _userdata: Any, _flags: Any, reason_code: Any, _properties: Any) -> None:
+    def on_connect(
+        client: Any,
+        _userdata: Any,
+        _flags: Any,
+        reason_code: Any,
+        _properties: Any,
+    ) -> None:
         readiness.record_connection_attempt()
         if not _mqtt_operation_succeeded(reason_code):
             logger.error("mqtt_connection_failed reason=%s", reason_code)
@@ -115,6 +110,10 @@ def run() -> None:
             RPC_REQUEST_TOPIC,
             RPC_REQUEST_QOS,
         )
+
+    def on_connect_fail(_client: Any, _userdata: Any) -> None:
+        readiness.record_connection_attempt()
+        logger.error("mqtt_connection_failed")
 
     def on_subscribe(
         _client: Any,
@@ -189,12 +188,39 @@ def run() -> None:
             )
 
     client.on_connect = on_connect
+    client.on_connect_fail = on_connect_fail
     client.on_subscribe = on_subscribe
     client.on_disconnect = on_disconnect
     client.on_publish = on_publish
     client.on_message = on_message
-    client.connect(host, port, keepalive=60)
-    client.loop_start()
+
+
+def run() -> None:
+    import paho.mqtt.client as mqtt
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    host = os.environ["IOT_CORE_MQTT_HOST"]
+    port = int(os.environ["IOT_CORE_MQTT_PORT"])
+    device_token = os.environ["IOT_CORE_DEVICE_TOKEN"]
+    telemetry_interval_seconds = float(
+        os.environ["IOT_SIMULATOR_TELEMETRY_INTERVAL_SECONDS"]
+    )
+    if telemetry_interval_seconds <= 0:
+        raise ValueError("IOT_SIMULATOR_TELEMETRY_INTERVAL_SECONDS must be positive")
+
+    readiness = RpcSubscriptionReadiness(
+        Path(
+            os.environ.get(
+                "IOT_SIMULATOR_READINESS_FILE", "/tmp/core-iot-device-simulator.ready"
+            )
+        )
+    )
+    state = ChargeDeviceState()
+    state_lock = threading.Lock()
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client.username_pw_set(DEVICE_TOKEN_USERNAME, device_token)
+    configure_mqtt_callbacks(client, readiness, state, state_lock)
+    start_mqtt_client(client, host=host, port=port)
     try:
         while True:
             with state_lock:

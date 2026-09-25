@@ -65,3 +65,33 @@ new observability has not revealed an additional runtime bug, and this report ma
 claim about the prior command-expiration cause. The next controller-run E2E session can use
 the safe simulator logs and Compose health state to distinguish a broker subscription issue
 from a later RPC delivery/response problem.
+
+## Startup recovery follow-up
+
+The simulator no longer performs synchronous `connect()` before starting Paho's network
+loop. It configures reconnect backoff (one to thirty seconds), calls `connect_async()`, and
+then starts the loop. This keeps the process alive while an external Core MQTT broker is
+temporarily unavailable; readiness remains absent until a later successful exact QoS-1
+SUBACK. The asynchronous connection-failure callback also clears readiness and records a
+safe connection-failure log.
+
+### Follow-up TDD evidence
+
+The new focused test first failed at import time because `configure_mqtt_callbacks` and
+`start_mqtt_client` did not exist. After implementing them, the focused readiness suite
+passed with eight test methods (including two SUBACK subcases). The final full simulator
+suite passed:
+
+```text
+Ran 14 tests in 0.003s
+OK
+```
+
+The callback integration tests use a mock Paho client and verify that a failed `subscribe()`
+clears a previously healthy readiness file, while multiple grants (`[1, 1]`) and rejected
+grants (`[128]`) do not mark it healthy. The lifecycle test verifies the retry configuration,
+asynchronous connect, and loop-start ordering.
+
+Follow-up verification also repeated `py_compile`, `git diff --check`, `docker compose
+config -q` with non-secret placeholders, and the simulator image build successfully. No new
+live Core E2E attempt was run.
