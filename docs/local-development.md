@@ -15,14 +15,14 @@ the simulator reaches MQTT through `host.docker.internal:18893`.
 
 Supply Core credentials through the invoking shell or a private process
 environment; do not put them in this repository, a Compose file, a cookie jar,
-or a checked-in `.env` file. The safe real-flow command reuses `tenant1`,
-`user-a`, and the configured isolated device, obtains the device MQTT token by
-API, writes it only into a temporary directory with mode `0700`, starts Compose,
-then removes that directory.
+or a checked-in `.env` file. The safe real-flow command reuses `tenant1` and
+`user-a`; it reuses `IOT_CORE_DEVICE_ID` when that device exists, otherwise
+provisions and assigns a fresh isolated device. It obtains the device MQTT token
+by API, writes that token and the selected device ID only into a temporary
+directory with mode `0700`, starts Compose, then removes that directory.
 
 ```sh
 export IOT_CORE_ACCESS_TOKEN='<delegated user token>'
-export IOT_CORE_DEVICE_ID='<isolated Core device id>'
 export CORE_TENANT_PASSWORD='<tenant1 password>'
 export CORE_USER_PASSWORD='<user-a password>'
 pnpm tsx scripts/core-iot-local-e2e.ts
@@ -32,9 +32,9 @@ The harness accepts only the two isolated `127.0.0.1` Core HTTP endpoints. It
 never prints credentials. It starts services with `docker compose up -d --build
 --wait` and intentionally does not run `docker compose down -v`.
 
-For a manual Compose start, additionally provide `IOT_CORE_DEVICE_TOKEN` from
-your approved local Core workflow. The token is a runtime secret and must not
-be copied into `.env.example` or source control.
+For a manual Compose start, provide both `IOT_CORE_DEVICE_ID` and
+`IOT_CORE_DEVICE_TOKEN` from your approved local Core workflow. The token is a
+runtime secret and must not be copied into `.env.example` or source control.
 
 The API waits for PostgreSQL, runs its TypeORM migrations and idempotent demo
 seed, then starts. The seed creates station `ST01`, connector `ST01-C01`, and
@@ -88,7 +88,7 @@ ADMIN_PASSWORD=local-admin-password-change-me
 STATION_QR_ENCRYPTION_KEY=<64-character-hex-key>
 IOT_CORE_PUBLIC_URL=http://127.0.0.1:18090
 IOT_CORE_ACCESS_TOKEN=<delegated-user-access-token>
-IOT_CORE_DEVICE_ID=<isolated-core-device-id>
+IOT_CORE_DEVICE_ID=<optional-isolated-core-device-id-for-the-harness>
 IOT_CORE_DEVICE_TOKEN=<isolated-core-device-token>
 ```
 

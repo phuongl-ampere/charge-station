@@ -9,8 +9,11 @@ const DEFAULT_API_URL = "http://127.0.0.1:4000";
 const DEFAULT_TENANT_SLUG = "tenant1";
 const DEFAULT_USER_NAME = "user-a";
 const DEFAULT_DEVICE_NAME = "Charge Station Simulator";
+const DEFAULT_ADMIN_EMAIL = "admin@charge.local";
+const DEFAULT_ADMIN_PASSWORD = "local-admin-password-change-me";
 const WAIT_TIMEOUT_MS = 45_000;
 const WAIT_INTERVAL_MS = 500;
+const TELEMETRY_FRESHNESS_MS = 15_000;
 
 export interface IsolatedCoreUrls {
   publicUrl: URL;
@@ -43,7 +46,16 @@ interface RuntimeSecretFile {
 }
 
 interface CoreTelemetry {
+  eventAt: string | null;
   relayState: boolean | null;
+  sessionId: string | null;
+  currentA: number | null;
+  powerW: number | null;
+  energyKwh: number | null;
+}
+
+interface CoreTelemetryReader {
+  latestTelemetry(deviceId: string): Promise<CoreTelemetry | null>;
 }
 
 export function isolatedCoreUrls(
@@ -64,18 +76,26 @@ export function isolatedCoreUrls(
 }
 
 export async function writeDeviceTokenEnvironment(
+  deviceId: string,
   deviceToken: string,
 ): Promise<RuntimeSecretFile> {
+  if (!deviceId || /[\r\n]/.test(deviceId)) {
+    throw new Error("Core device ID is invalid");
+  }
   if (!deviceToken || /[\r\n]/.test(deviceToken)) {
     throw new Error("Core device token is invalid");
   }
   const directory = await mkdtemp(join(tmpdir(), "charge-station-core-iot-"));
   await chmod(directory, 0o700);
   const envFile = join(directory, "compose.env");
-  await writeFile(envFile, `IOT_CORE_DEVICE_TOKEN=${deviceToken}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  await writeFile(
+    envFile,
+    `IOT_CORE_DEVICE_ID=${deviceId}\nIOT_CORE_DEVICE_TOKEN=${deviceToken}\n`,
+    {
+      encoding: "utf8",
+      mode: 0o600,
+    },
+  );
   await chmod(envFile, 0o600);
   return {
     directory,
@@ -147,14 +167,14 @@ export async function ensureDevice(
   input: { name: string },
 ): Promise<Device> {
   const urls = isolatedCoreUrls();
-  const configuredId = requiredEnvironment("IOT_CORE_DEVICE_ID");
+  const configuredId = process.env.IOT_CORE_DEVICE_ID?.trim();
   const devices = await managementJsonBody(
     urls.managementUrl,
     "/api/management/devices",
     { headers: managementHeaders(tenant.session) },
   );
   const existing = arrayOfRecords(devices).find(
-    (device) => device.device_id === configuredId,
+    (device) => configuredId !== undefined && device.device_id === configuredId,
   );
   const device = existing
     ? existing
@@ -171,11 +191,6 @@ export async function ensureDevice(
         "Core device",
       );
   const id = requiredString(device, "device_id", "Core device");
-  if (id !== configuredId) {
-    throw new Error(
-      "IOT_CORE_DEVICE_ID does not identify the provisioned Core device",
-    );
-  }
 
   await managementJsonBody(
     urls.managementUrl,
@@ -214,7 +229,10 @@ export async function run(): Promise<void> {
   const device = await ensureDevice(tenant, user, {
     name: process.env.CORE_DEVICE_NAME?.trim() || DEFAULT_DEVICE_NAME,
   });
-  const runtimeSecrets = await writeDeviceTokenEnvironment(device.token);
+  const runtimeSecrets = await writeDeviceTokenEnvironment(
+    device.id,
+    device.token,
+  );
   try {
     await runCompose(runtimeSecrets.envFile);
   } finally {
@@ -232,17 +250,21 @@ export async function run(): Promise<void> {
     const session = await api.sessionStatus(order.sessionId, order.accessToken);
     return session === "CHARGING";
   });
-  assertRelayState(await core.latestTelemetry(device.id), true);
+  await waitForChargingTelemetry(core, device.id, order.sessionId);
+  await waitFor(async () => {
+    await api.assertAdminChargingTelemetry(device.id, order.sessionId);
+    return true;
+  });
   await api.stopSession(order.sessionId, order.accessToken);
   await waitFor(async () => {
     const session = await api.sessionStatus(order.sessionId, order.accessToken);
     return session === "CANCELLED";
   });
-  assertRelayState(await core.latestTelemetry(device.id), false);
+  await waitForStoppedTelemetry(core, device.id);
   console.log("Core IoT local charging flow verified.");
 }
 
-class PublicCoreClient {
+export class PublicCoreClient {
   constructor(
     private readonly baseUrl: URL,
     private readonly accessToken: string,
@@ -262,6 +284,7 @@ class PublicCoreClient {
     url.searchParams.set("limit", "100");
     const response = await fetch(url, {
       headers: { authorization: `Bearer ${this.accessToken}` },
+      redirect: "error",
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) {
@@ -275,9 +298,42 @@ class PublicCoreClient {
     if (!latest || !isRecord(latest) || !isRecord(latest.measurements)) {
       return null;
     }
-    const relayState = latest.measurements.relay_state;
-    return { relayState: typeof relayState === "boolean" ? relayState : null };
+    const measurements = latest.measurements;
+    return {
+      eventAt: typeof latest.event_at === "string" ? latest.event_at : null,
+      relayState:
+        typeof measurements.relay_state === "boolean"
+          ? measurements.relay_state
+          : null,
+      sessionId: stringValue(measurements, "session_id"),
+      currentA: numberValue(measurements, "current_a"),
+      powerW: numberValue(measurements, "power_w"),
+      energyKwh: numberValue(measurements, "energy_kwh"),
+    };
   }
+}
+
+export async function waitForChargingTelemetry(
+  core: CoreTelemetryReader,
+  deviceId: string,
+  sessionId: string,
+): Promise<CoreTelemetry> {
+  return waitFor(async () => {
+    const telemetry = await core.latestTelemetry(deviceId);
+    return isFreshChargingTelemetry(telemetry, sessionId) ? telemetry : null;
+  });
+}
+
+export async function waitForStoppedTelemetry(
+  core: CoreTelemetryReader,
+  deviceId: string,
+): Promise<CoreTelemetry> {
+  return waitFor(async () => {
+    const telemetry = await core.latestTelemetry(deviceId);
+    return telemetry?.relayState === false && telemetry.sessionId === null
+      ? telemetry
+      : null;
+  });
 }
 
 class ChargeStationApi {
@@ -346,6 +402,55 @@ class ChargeStationApi {
     });
   }
 
+  async assertAdminChargingTelemetry(
+    deviceId: string,
+    sessionId: string,
+  ): Promise<void> {
+    const login = asRecord(
+      await this.request("/auth/login", {
+        method: "POST",
+        body: {
+          email:
+            process.env.CHARGE_STATION_ADMIN_EMAIL?.trim() ||
+            DEFAULT_ADMIN_EMAIL,
+          password:
+            process.env.CHARGE_STATION_ADMIN_PASSWORD ?? DEFAULT_ADMIN_PASSWORD,
+        },
+      }),
+      "Charge Station admin login response",
+    );
+    const adminAccessToken = requiredString(
+      login,
+      "accessToken",
+      "Charge Station admin login response",
+    );
+    const stations = arrayOfRecords(
+      await this.request("/admin/stations", {
+        headers: bearerHeaders(adminAccessToken),
+      }),
+    );
+    const station = stations.find(
+      (candidate) => candidate.deviceId === deviceId,
+    );
+    const telemetry =
+      station && isRecord(station.telemetry) ? station.telemetry : null;
+    const adminTelemetry: CoreTelemetry | null = telemetry
+      ? {
+          eventAt: stringValue(telemetry, "eventAt"),
+          relayState: booleanValue(telemetry, "relayState"),
+          sessionId: stringValue(telemetry, "sessionId"),
+          currentA: numberValue(telemetry, "currentA"),
+          powerW: numberValue(telemetry, "powerW"),
+          energyKwh: numberValue(telemetry, "energyKwh"),
+        }
+      : null;
+    if (!isFreshChargingTelemetry(adminTelemetry, sessionId)) {
+      throw new Error(
+        "Charge Station Admin telemetry did not confirm the active Core session",
+      );
+    }
+  }
+
   private async request(
     path: string,
     options: {
@@ -399,6 +504,7 @@ async function managementJson(
       ...options.headers,
     },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    redirect: "error",
     signal: AbortSignal.timeout(10_000),
   });
   const allowed = options.allowStatus ?? [200, 201];
@@ -480,7 +586,7 @@ async function runCompose(secretEnvFile: string): Promise<void> {
     const child = spawn(
       "docker",
       ["compose", "--env-file", secretEnvFile, "up", "-d", "--build", "--wait"],
-      { stdio: "inherit" },
+      { stdio: "inherit", env: composeEnvironment() },
     );
     child.once("error", () =>
       reject(new Error("Unable to start Docker Compose")),
@@ -491,6 +597,15 @@ async function runCompose(secretEnvFile: string): Promise<void> {
         : reject(new Error("Docker Compose did not start successfully"));
     });
   });
+}
+
+function composeEnvironment(): NodeJS.ProcessEnv {
+  const {
+    IOT_CORE_DEVICE_ID: _deviceId,
+    IOT_CORE_DEVICE_TOKEN: _deviceToken,
+    ...environment
+  } = process.env;
+  return environment;
 }
 
 async function waitFor<T>(
@@ -517,13 +632,28 @@ async function waitFor<T>(
   throw new Error("Timed out waiting for the Core IoT flow");
 }
 
-function assertRelayState(
+function isFreshChargingTelemetry(
   telemetry: CoreTelemetry | null,
-  expected: boolean,
-): void {
-  if (!telemetry || telemetry.relayState !== expected) {
-    throw new Error("Core telemetry did not confirm the expected relay state");
+  sessionId: string,
+): telemetry is CoreTelemetry {
+  if (
+    !telemetry ||
+    telemetry.relayState !== true ||
+    telemetry.sessionId !== sessionId ||
+    telemetry.currentA === null ||
+    telemetry.currentA <= 0 ||
+    telemetry.powerW === null ||
+    telemetry.powerW <= 0 ||
+    telemetry.eventAt === null
+  ) {
+    return false;
   }
+  const eventAt = Date.parse(telemetry.eventAt);
+  return (
+    Number.isFinite(eventAt) &&
+    eventAt >= Date.now() - TELEMETRY_FRESHNESS_MS &&
+    eventAt <= Date.now() + TELEMETRY_FRESHNESS_MS
+  );
 }
 
 function bearerHeaders(token: string): HeadersInit {
@@ -554,6 +684,32 @@ function requiredString(
     throw new Error(`${description} is invalid`);
   }
   return candidate;
+}
+
+function stringValue(
+  value: Record<string, unknown>,
+  key: string,
+): string | null {
+  const candidate = value[key];
+  return typeof candidate === "string" ? candidate : null;
+}
+
+function booleanValue(
+  value: Record<string, unknown>,
+  key: string,
+): boolean | null {
+  const candidate = value[key];
+  return typeof candidate === "boolean" ? candidate : null;
+}
+
+function numberValue(
+  value: Record<string, unknown>,
+  key: string,
+): number | null {
+  const candidate = value[key];
+  return typeof candidate === "number" && Number.isFinite(candidate)
+    ? candidate
+    : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

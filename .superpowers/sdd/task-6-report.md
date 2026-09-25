@@ -113,3 +113,34 @@ credential-gated start/order/stop flow was deliberately not run. This avoids
 inventing, searching for, printing, or persisting Core credentials. All static,
 unit, integration-test, build, lint, Compose-schema, and unauthenticated Core
 reachability checks above were run successfully.
+
+## Review-Fix Follow-up
+
+The harness now provisions a device when no configured ID is present or when a
+configured ID is no longer found, and writes both the selected device ID and
+the MQTT token to the private temporary Compose environment file. The Compose
+child process deliberately removes any inherited device ID or token so that
+those private values cannot be overridden by the invoking shell.
+
+Telemetry confirmation is bounded polling rather than a one-shot observation.
+Start requires a fresh sample for the created session with relay on and
+nonzero current and power; stop requires relay off with the session cleared.
+The harness also verifies the matching live telemetry returned by Charge
+Station Admin before stopping. Core public and management HTTP requests reject
+redirects.
+
+Review-fix verification completed without exposing credentials:
+
+- Harness regression suite: 9 tests passed, including fresh provisioning,
+  private environment precedence, redirect rejection, delayed telemetry, and
+  Admin telemetry validation.
+- Workspace unit suite: 171 tests passed across API, web, and contracts.
+- API E2E suite: 20 tests passed.
+- Build, API/web type checks, formatting, and diff validation passed.
+- Browser E2E suite: 8 tests passed using the active local web server with all
+  API requests intercepted; no Compose service was started, stopped, or
+  modified.
+
+The credential-gated live Core flow remains unexecuted in this shell because
+the required runtime credentials and access token are absent. No credential
+values, cookies, device identifiers, or temporary-secret paths were recorded.
