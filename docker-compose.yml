@@ -19,7 +19,7 @@ services:
     build:
       context: .
       args:
-        NEXT_PUBLIC_API_URL: ${CHARGE_STATION_API_ORIGIN:-http://127.0.0.1:4000}
+        NEXT_PUBLIC_API_URL: ${CHARGE_STATION_API_ORIGIN:-http://localhost:4000}
     command:
       [
         "sh",
@@ -35,7 +35,7 @@ services:
       ADMIN_EMAIL: admin@charge.local
       ADMIN_PASSWORD: local-admin-password-change-me
       STATION_QR_ENCRYPTION_KEY: 4d8eae9b3271c5f079cfb8b4f14ba3ca9d7e6a0b4c32f807c2d2ab5e983f1140
-      FRONTEND_URL: ${CHARGE_STATION_WEB_ORIGIN:-http://127.0.0.1:3100}
+      FRONTEND_URL: ${CHARGE_STATION_WEB_ORIGIN:-http://localhost:3100}
       IOT_CORE_PUBLIC_URL: http://host.docker.internal:18090
       IOT_CORE_ACCESS_TOKEN: ${IOT_CORE_ACCESS_TOKEN:?Set IOT_CORE_ACCESS_TOKEN in the shell that starts Compose}
       IOT_CORE_DEVICE_ID: ${IOT_CORE_DEVICE_ID:?Set IOT_CORE_DEVICE_ID in the shell that starts Compose}
@@ -48,9 +48,9 @@ services:
       PAYOS_CLIENT_ID: local-client-id
       PAYOS_API_KEY: local-api-key
       PAYOS_CHECKSUM_KEY: local-checksum-key
-      PAYOS_MOCK_CHECKOUT_BASE_URL: ${CHARGE_STATION_API_ORIGIN:-http://127.0.0.1:4000}
-      PAYOS_RETURN_URL: ${CHARGE_STATION_API_ORIGIN:-http://127.0.0.1:4000}/payments/payos/return
-      PAYOS_CANCEL_URL: ${CHARGE_STATION_API_ORIGIN:-http://127.0.0.1:4000}/payments/payos/cancel
+      PAYOS_MOCK_CHECKOUT_BASE_URL: ${CHARGE_STATION_API_ORIGIN:-http://localhost:4000}
+      PAYOS_RETURN_URL: ${CHARGE_STATION_API_ORIGIN:-http://localhost:4000}/payments/payos/return
+      PAYOS_CANCEL_URL: ${CHARGE_STATION_API_ORIGIN:-http://localhost:4000}/payments/payos/cancel
       PAYMENT_RESERVATION_TTL_MINUTES: 15
       PAYMENT_REAPER_INTERVAL_MS: 60000
     ports:
@@ -85,7 +85,7 @@ services:
     build:
       context: .
       args:
-        NEXT_PUBLIC_API_URL: ${CHARGE_STATION_API_ORIGIN:-http://127.0.0.1:4000}
+        NEXT_PUBLIC_API_URL: ${CHARGE_STATION_API_ORIGIN:-http://localhost:4000}
     command:
       [
         "pnpm",
@@ -101,7 +101,7 @@ services:
       charge-station-api:
         condition: service_healthy
     environment:
-      NEXT_PUBLIC_API_URL: ${CHARGE_STATION_API_ORIGIN:-http://127.0.0.1:4000}
+      NEXT_PUBLIC_API_URL: ${CHARGE_STATION_API_ORIGIN:-http://localhost:4000}
     ports:
       - "127.0.0.1:${CHARGE_STATION_WEB_HOST_PORT:-3100}:3000"
     healthcheck:

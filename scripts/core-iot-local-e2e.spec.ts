@@ -49,10 +49,10 @@ describe("Core IoT local runtime", () => {
     expect(compose).toContain("CHARGE_STATION_WEB_HOST_PORT:-3100");
     expect(compose).toContain("CHARGE_STATION_POSTGRES_HOST_PORT:-5432");
     expect(compose).toContain(
-      "CHARGE_STATION_API_ORIGIN:-http://127.0.0.1:4000",
+      "CHARGE_STATION_API_ORIGIN:-http://localhost:4000",
     );
     expect(compose).toContain(
-      "CHARGE_STATION_WEB_ORIGIN:-http://127.0.0.1:3100",
+      "CHARGE_STATION_WEB_ORIGIN:-http://localhost:3100",
     );
   });
 

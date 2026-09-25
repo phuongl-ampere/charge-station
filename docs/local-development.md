@@ -64,7 +64,7 @@ Pending persisted commands are scheduled asynchronously only after API health.
 The API sends two-way REST commands to Core and monitors Core telemetry. The
 `core-iot-device-simulator` sidecar handles Core MQTT relay RPC and publishes
 telemetry. The web build uses the configured `CHARGE_STATION_API_ORIGIN`
-(default `http://127.0.0.1:4000`), because that URL is resolved by the browser,
+(default `http://localhost:4000`), because that URL is resolved by the browser,
 not by the container.
 
 Open `http://localhost:3100/scan/ST01-C01` to create a local order. With `PAYOS_MODE=mock`, checkout is an API-hosted local page and no external PayOS request is made.

@@ -164,3 +164,17 @@ suite passed 171 tests, formatting and diff validation passed, and Compose
 schema rendering passed with both default manual ports and synthetic overridden
 API, web, PostgreSQL, and origin values. No OAuth or credential-gated live
 operation was attempted in this follow-up.
+
+## Manual-Origin Correction
+
+Manual Compose defaults now consistently use `localhost` for API, web,
+frontend, and PayOS mock callback origins, matching the documented browser
+URLs and exact CORS origin checks. The Compose bind addresses remain
+`127.0.0.1` only. The harness continues to pass its explicit isolated
+`127.0.0.1` origins, so its API client, web build, frontend origin, and PayOS
+mock callbacks remain coherent.
+
+The focused suite passed 11 tests after a red assertion established the missing
+manual `localhost` defaults. Compose rendering confirmed both the restored
+manual origins and an explicit isolated-origin override. No existing Compose
+service was modified and no live E2E run was attempted.
