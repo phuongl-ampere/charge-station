@@ -29,6 +29,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      core-iot-device-simulator:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgres://charge:charge@postgres:5432/charge_station
       JWT_SECRET: development-jwt-secret-change-me
@@ -78,8 +80,21 @@ services:
       IOT_CORE_MQTT_PORT: "18893"
       IOT_CORE_DEVICE_TOKEN: ${IOT_CORE_DEVICE_TOKEN:?Run the Core E2E harness or set IOT_CORE_DEVICE_TOKEN in the shell that starts Compose}
       IOT_SIMULATOR_TELEMETRY_INTERVAL_SECONDS: ${IOT_SIMULATOR_TELEMETRY_INTERVAL_SECONDS:-1}
+      IOT_SIMULATOR_READINESS_FILE: /tmp/core-iot-device-simulator.ready
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os; from pathlib import Path; raise SystemExit(0 if Path(os.environ['IOT_SIMULATOR_READINESS_FILE']).is_file() else 1)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
 
   web:
     build:
