@@ -1,9 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from src.device_state import ChargeDeviceState
 from src.main import (
+    RPC_RESPONSE_MAX_PUBLISH_ATTEMPTS,
     _mqtt_operation_succeeded,
     configure_mqtt_callbacks,
     start_mqtt_client,
@@ -145,6 +147,149 @@ class RpcSubscriptionReadinessTests(unittest.TestCase):
             self.assertFalse(ready_path.exists())
 
 
+class RpcResponseDeliveryTests(unittest.TestCase):
+    def test_defers_rpc_response_until_after_message_callback(self) -> None:
+        client = ResponseFakeMqttClient()
+        scheduled: list[tuple[float, object]] = []
+
+        configure_mqtt_callbacks(
+            client,
+            StubRpcReadiness(ready=True),
+            ChargeDeviceState(),
+            response_scheduler=lambda delay, callback: scheduled.append((delay, callback)),
+        )
+
+        client.on_message(
+            client,
+            None,
+            SimpleNamespace(
+                topic="v1/devices/me/rpc/request/command-1",
+                payload=(
+                    b'{"method":"setRelay","mode":"two_way","params":'
+                    b'{"relayId":"relay-1","enabled":false}}'
+                ),
+            ),
+        )
+
+        self.assertEqual(client.publishes, [])
+        self.assertEqual(len(scheduled), 1)
+
+        _, callback = scheduled.pop()
+        callback()
+
+        self.assertEqual(
+            client.publishes,
+            [
+                (
+                    "v1/devices/me/rpc/response/command-1",
+                    '{"ok":true,"result":{"relayId":"relay-1","enabled":false,"remainingSeconds":0}}',
+                    1,
+                )
+            ],
+        )
+
+    def test_retries_unacknowledged_rpc_response_until_broker_puback(self) -> None:
+        client = ResponseFakeMqttClient()
+        scheduled: list[tuple[float, object]] = []
+
+        configure_mqtt_callbacks(
+            client,
+            StubRpcReadiness(ready=True),
+            ChargeDeviceState(),
+            response_scheduler=lambda delay, callback: scheduled.append((delay, callback)),
+        )
+        client.on_message(
+            client,
+            None,
+            SimpleNamespace(
+                topic="v1/devices/me/rpc/request/command-1",
+                payload=(
+                    b'{"method":"setRelay","mode":"two_way","params":'
+                    b'{"relayId":"relay-1","enabled":false}}'
+                ),
+            ),
+        )
+
+        _, initial_attempt = scheduled.pop()
+        initial_attempt()
+        _, retry_attempt = scheduled.pop()
+        retry_attempt()
+        self.assertEqual(len(client.publishes), 2)
+
+        client.on_publish(client, None, 2, 0, None)
+        _, post_ack_attempt = scheduled.pop()
+        post_ack_attempt()
+
+        self.assertEqual(len(client.publishes), 2)
+
+    def test_keeps_rpc_responses_out_of_paho_queue_until_rpc_is_ready(self) -> None:
+        client = ResponseFakeMqttClient()
+        scheduled: list[tuple[float, object]] = []
+
+        configure_mqtt_callbacks(
+            client,
+            StubRpcReadiness(ready=False),
+            ChargeDeviceState(),
+            response_scheduler=lambda delay, callback: scheduled.append((delay, callback)),
+        )
+        client.on_message(client, None, relay_off_message())
+
+        _, initial_attempt = scheduled.pop()
+        initial_attempt()
+
+        self.assertEqual(client.publishes, [])
+        self.assertEqual(len(scheduled), 1)
+
+    def test_bounds_unacknowledged_rpc_response_publish_attempts(self) -> None:
+        client = ResponseFakeMqttClient()
+        scheduled: list[tuple[float, object]] = []
+
+        configure_mqtt_callbacks(
+            client,
+            StubRpcReadiness(ready=True),
+            ChargeDeviceState(),
+            response_scheduler=lambda delay, callback: scheduled.append((delay, callback)),
+        )
+        client.on_message(client, None, relay_off_message())
+
+        for _ in range(RPC_RESPONSE_MAX_PUBLISH_ATTEMPTS):
+            _, attempt = scheduled.pop()
+            attempt()
+
+        self.assertEqual(len(client.publishes), RPC_RESPONSE_MAX_PUBLISH_ATTEMPTS)
+
+        _, post_limit_attempt = scheduled.pop()
+        with self.assertLogs("src.main", level="ERROR"):
+            post_limit_attempt()
+
+        self.assertEqual(len(client.publishes), RPC_RESPONSE_MAX_PUBLISH_ATTEMPTS)
+
+    def test_bounds_publish_attempts_when_paho_rejects_the_response_queue(self) -> None:
+        client = ResponseFakeMqttClient(publish_rc=1)
+        scheduled: list[tuple[float, object]] = []
+
+        configure_mqtt_callbacks(
+            client,
+            StubRpcReadiness(ready=True),
+            ChargeDeviceState(),
+            response_scheduler=lambda delay, callback: scheduled.append((delay, callback)),
+        )
+        client.on_message(client, None, relay_off_message())
+
+        with self.assertLogs("src.main", level="ERROR"):
+            for _ in range(RPC_RESPONSE_MAX_PUBLISH_ATTEMPTS):
+                _, attempt = scheduled.pop()
+                attempt()
+
+        self.assertEqual(len(client.publishes), RPC_RESPONSE_MAX_PUBLISH_ATTEMPTS)
+
+        _, post_limit_attempt = scheduled.pop()
+        with self.assertLogs("src.main", level="ERROR"):
+            post_limit_attempt()
+
+        self.assertEqual(len(client.publishes), RPC_RESPONSE_MAX_PUBLISH_ATTEMPTS)
+
+
 class FakeMqttClient:
     def __init__(self, *, subscribe_result: tuple[int, int] = (0, 1)) -> None:
         self.subscribe_result = subscribe_result
@@ -162,3 +307,29 @@ class FakeMqttClient:
     def subscribe(self, _topic: str, *, qos: int) -> tuple[int, int]:
         self.calls.append(("subscribe", qos))
         return self.subscribe_result
+
+
+class ResponseFakeMqttClient(FakeMqttClient):
+    def __init__(self, *, publish_rc: int = 0) -> None:
+        super().__init__()
+        self.publish_rc = publish_rc
+        self.publishes: list[tuple[str, str, int]] = []
+
+    def publish(self, topic: str, payload: str, *, qos: int) -> SimpleNamespace:
+        self.publishes.append((topic, payload, qos))
+        return SimpleNamespace(rc=self.publish_rc, mid=len(self.publishes))
+
+
+class StubRpcReadiness:
+    def __init__(self, *, ready: bool) -> None:
+        self.is_ready = ready
+
+
+def relay_off_message() -> SimpleNamespace:
+    return SimpleNamespace(
+        topic="v1/devices/me/rpc/request/command-1",
+        payload=(
+            b'{"method":"setRelay","mode":"two_way","params":'
+            b'{"relayId":"relay-1","enabled":false}}'
+        ),
+    )

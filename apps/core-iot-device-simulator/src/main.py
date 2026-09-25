@@ -7,7 +7,7 @@ import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .device_state import ChargeDeviceState
 from .rpc_readiness import (
@@ -22,6 +22,9 @@ RPC_RESPONSE_TOPIC = "v1/devices/me/rpc/response/{}"
 TELEMETRY_TOPIC = "v1/devices/me/telemetry"
 DEVICE_TOKEN_USERNAME = "iotd_device_token"
 RELAY_ID = "relay-1"
+RPC_RESPONSE_INITIAL_DELAY_SECONDS = 0.1
+RPC_RESPONSE_RETRY_DELAY_SECONDS = 1.0
+RPC_RESPONSE_MAX_PUBLISH_ATTEMPTS = 3
 logger = logging.getLogger(__name__)
 
 
@@ -81,14 +84,127 @@ def start_mqtt_client(client: Any, *, host: str, port: int) -> None:
     client.loop_start()
 
 
+ResponseScheduler = Callable[[float, Callable[[], None]], None]
+ResponsePublishAllowed = Callable[[], bool]
+
+
+def schedule_response_attempt(delay_seconds: float, callback: Callable[[], None]) -> None:
+    timer = threading.Timer(delay_seconds, callback)
+    timer.daemon = True
+    timer.start()
+
+
+class RpcResponseDelivery:
+    def __init__(
+        self,
+        client: Any,
+        scheduler: ResponseScheduler,
+        publish_allowed: ResponsePublishAllowed,
+    ) -> None:
+        self._client = client
+        self._scheduler = scheduler
+        self._publish_allowed = publish_allowed
+        self._lock = threading.Lock()
+        self._pending_payloads: dict[str, str] = {}
+        self._publish_attempts: dict[str, int] = {}
+        self._command_ids_by_mid: dict[int, str] = {}
+
+    def queue(self, command_id: str, response: dict[str, object]) -> None:
+        payload = json.dumps(response, separators=(",", ":"))
+        with self._lock:
+            if command_id in self._pending_payloads:
+                return
+            self._pending_payloads[command_id] = payload
+            self._publish_attempts[command_id] = 0
+        self._schedule_attempt(command_id, RPC_RESPONSE_INITIAL_DELAY_SECONDS)
+
+    def record_publish(self, mid: int, reason_code: Any) -> None:
+        with self._lock:
+            command_id = self._command_ids_by_mid.pop(mid, None)
+            if command_id is None:
+                return
+            if not _mqtt_operation_succeeded(reason_code):
+                logger.error(
+                    "mqtt_rpc_response_publish_failed command_id=%s reason=%s",
+                    command_id,
+                    reason_code,
+                )
+                return
+            if self._pending_payloads.pop(command_id, None) is None:
+                return
+            self._publish_attempts.pop(command_id, None)
+            self._command_ids_by_mid = {
+                pending_mid: pending_command_id
+                for pending_mid, pending_command_id in self._command_ids_by_mid.items()
+                if pending_command_id != command_id
+            }
+        logger.info("mqtt_rpc_response_published command_id=%s", command_id)
+
+    def _schedule_attempt(self, command_id: str, delay_seconds: float) -> None:
+        self._scheduler(
+            delay_seconds,
+            lambda: self._publish_if_pending(command_id),
+        )
+
+    def _publish_if_pending(self, command_id: str) -> None:
+        should_retry = False
+        with self._lock:
+            payload = self._pending_payloads.get(command_id)
+            if payload is None:
+                return
+            if not self._publish_allowed():
+                should_retry = True
+            elif self._publish_attempts[command_id] >= RPC_RESPONSE_MAX_PUBLISH_ATTEMPTS:
+                self._pending_payloads.pop(command_id, None)
+                self._publish_attempts.pop(command_id, None)
+                self._command_ids_by_mid = {
+                    pending_mid: pending_command_id
+                    for pending_mid, pending_command_id in self._command_ids_by_mid.items()
+                    if pending_command_id != command_id
+                }
+                logger.error(
+                    "mqtt_rpc_response_delivery_abandoned command_id=%s",
+                    command_id,
+                )
+            else:
+                self._command_ids_by_mid = {
+                    pending_mid: pending_command_id
+                    for pending_mid, pending_command_id in self._command_ids_by_mid.items()
+                    if pending_command_id != command_id
+                }
+                publish_info = self._client.publish(
+                    RPC_RESPONSE_TOPIC.format(command_id),
+                    payload,
+                    qos=1,
+                )
+                self._publish_attempts[command_id] += 1
+                if _mqtt_operation_succeeded(publish_info.rc):
+                    self._command_ids_by_mid[publish_info.mid] = command_id
+                    logger.info("mqtt_rpc_response_queued command_id=%s", command_id)
+                else:
+                    logger.error(
+                        "mqtt_rpc_response_queue_failed command_id=%s result=%s",
+                        command_id,
+                        publish_info.rc,
+                    )
+                should_retry = True
+        if should_retry:
+            self._schedule_attempt(command_id, RPC_RESPONSE_RETRY_DELAY_SECONDS)
+
+
 def configure_mqtt_callbacks(
     client: Any,
     readiness: RpcSubscriptionReadiness,
     state: ChargeDeviceState,
     state_lock: Any | None = None,
+    response_scheduler: ResponseScheduler | None = None,
 ) -> None:
     state_lock = state_lock or threading.Lock()
-    response_publish_command_ids: dict[int, str] = {}
+    response_delivery = RpcResponseDelivery(
+        client,
+        response_scheduler or schedule_response_attempt,
+        lambda: telemetry_publish_is_allowed(readiness),
+    )
 
     def on_connect(
         client: Any,
@@ -153,17 +269,7 @@ def configure_mqtt_callbacks(
         reason_code: Any,
         _properties: Any,
     ) -> None:
-        command_id = response_publish_command_ids.pop(mid, None)
-        if command_id is None:
-            return
-        if _mqtt_operation_succeeded(reason_code):
-            logger.info("mqtt_rpc_response_published command_id=%s", command_id)
-        else:
-            logger.error(
-                "mqtt_rpc_response_publish_failed command_id=%s reason=%s",
-                command_id,
-                reason_code,
-            )
+        response_delivery.record_publish(mid, reason_code)
 
     def on_message(client: Any, _userdata: Any, message: Any) -> None:
         command_id = message.topic.rsplit("/", 1)[-1]
@@ -177,20 +283,7 @@ def configure_mqtt_callbacks(
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
             response = {"ok": False, "error": str(error)}
 
-        publish_info = client.publish(
-            RPC_RESPONSE_TOPIC.format(command_id),
-            json.dumps(response, separators=(",", ":")),
-            qos=1,
-        )
-        if _mqtt_operation_succeeded(publish_info.rc):
-            response_publish_command_ids[publish_info.mid] = command_id
-            logger.info("mqtt_rpc_response_queued command_id=%s", command_id)
-        else:
-            logger.error(
-                "mqtt_rpc_response_queue_failed command_id=%s result=%s",
-                command_id,
-                publish_info.rc,
-            )
+        response_delivery.queue(command_id, response)
 
     client.on_connect = on_connect
     client.on_connect_fail = on_connect_fail

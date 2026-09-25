@@ -28,6 +28,11 @@ export CORE_USER_PASSWORD='<user-a password>'
 pnpm tsx scripts/core-iot-local-e2e.ts
 ```
 
+`IOT_CORE_ACCESS_TOKEN` must be a delegated tenant-user token with
+`devices:read`, `telemetry:read`, `commands:read`, and `commands:write`.
+Core's public command API requires that user principal; a client-credentials
+token cannot control the station relay.
+
 The harness accepts only the two isolated `127.0.0.1` Core HTTP endpoints. It
 never prints credentials. It starts services with `docker compose up -d --build
 --wait` and intentionally does not run `docker compose down -v`.
