@@ -35,6 +35,7 @@ class ChargeDeviceStateTests(unittest.TestCase):
         sample = state.sample(now=101.1)
 
         self.assertFalse(sample["relay_state"])
+        self.assertEqual(sample["session_id"], "session-1")
         self.assertEqual(sample["last_stop_reason"], "TIMER_EXPIRED")
 
     def test_start_rejects_non_positive_duration(self) -> None:

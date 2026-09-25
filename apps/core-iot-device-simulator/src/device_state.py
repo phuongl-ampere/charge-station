@@ -67,7 +67,6 @@ class ChargeDeviceState:
 
         if self.relay_state and self.expires_at is not None and now >= self.expires_at:
             self.relay_state = False
-            self.session_id = None
             self.last_stop_reason = "TIMER_EXPIRED"
             self.expires_at = None
 
