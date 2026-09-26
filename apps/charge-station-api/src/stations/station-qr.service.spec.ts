@@ -49,8 +49,9 @@ describe("StationQrService", () => {
     const service = new StationQrService();
     const token = service.issue("3d20d6e7-5cbe-4fa2-af18-e8d1ab0ddbe6", 1)
       .token;
+    const tamperedLastCharacter = token.endsWith("x") ? "y" : "x";
 
-    expect(() => service.resolve(`${token.slice(0, -1)}x`)).toThrow(
+    expect(() => service.resolve(`${token.slice(0, -1)}${tamperedLastCharacter}`)).toThrow(
       InvalidStationQrError,
     );
   });
