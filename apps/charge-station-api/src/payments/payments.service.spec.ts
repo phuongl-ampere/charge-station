@@ -21,12 +21,12 @@ import type { PayosWebhook } from "./payos.client.js";
 import { PaymentsService } from "./payments.service.js";
 
 describe("PaymentsService webhook processing", () => {
-  it("rejects a new order when the linked station device is held", async () => {
+  it("rejects a new order when the linked station device is in use", async () => {
     const connector = {
       id: randomUUID(),
       code: "ST01-C01",
       status: "AVAILABLE",
-      station: { deviceHold: true },
+      station: { deviceInUse: true },
       pricingPlan: {
         hourlyPriceVnd: 5000,
         allowedDurationsMinutes: [60],
@@ -52,7 +52,7 @@ describe("PaymentsService webhook processing", () => {
 
     await expect(
       service.createOrder({ connectorCode: connector.code, durationMinutes: 60 }),
-    ).rejects.toThrow("Station device is held");
+    ).rejects.toThrow("Station device is in use");
     expect(connectorRepository.save).not.toHaveBeenCalled();
   });
 

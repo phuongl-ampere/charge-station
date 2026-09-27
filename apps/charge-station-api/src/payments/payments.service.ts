@@ -320,8 +320,8 @@ export class PaymentsService {
       if (!connector) {
         throw new NotFoundException("Connector not found");
       }
-      if (connector.station?.deviceHold) {
-        throw new BadRequestException("Station device is held");
+      if (connector.station?.deviceInUse) {
+        throw new BadRequestException("Station device is in use");
       }
       if (connector.status !== ConnectorStatus.AVAILABLE) {
         throw new BadRequestException("Connector is not available");
