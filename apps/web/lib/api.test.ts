@@ -59,14 +59,6 @@ describe("admin devices", () => {
       .mockResolvedValueOnce({ ok: true, json: async () => [] })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ deviceId: "device-1", inUse: true }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ deviceId: "device-1", inUse: false }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
         json: async () => ({ relayId: "relay-2", enabled: true }),
       })
       .mockResolvedValueOnce({
@@ -77,14 +69,6 @@ describe("admin devices", () => {
     const api = createAdminApi(localApiOrigin);
 
     await expect(api.getDevices("admin-token")).resolves.toEqual([]);
-    await expect(api.setDeviceUsage("device-1", true, "admin-token")).resolves.toEqual({
-      deviceId: "device-1",
-      inUse: true,
-    });
-    await expect(api.setDeviceUsage("device-1", false, "admin-token")).resolves.toEqual({
-      deviceId: "device-1",
-      inUse: false,
-    });
     await api.controlDeviceRelay("device-1", "relay-2", {
       enabled: true,
       durationSeconds: 60,
@@ -100,21 +84,11 @@ describe("admin devices", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      `${localApiOrigin}/admin/devices/device-1/occupy`,
-      expect.objectContaining({ method: "POST" }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
-      `${localApiOrigin}/admin/devices/device-1/release`,
-      expect.objectContaining({ method: "POST" }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      4,
       `${localApiOrigin}/admin/devices/device-1/relays/relay-2`,
       expect.objectContaining({ method: "POST" }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
-      5,
+      3,
       `${localApiOrigin}/admin/stations/station-1/device`,
       expect.objectContaining({ method: "PUT" }),
     );

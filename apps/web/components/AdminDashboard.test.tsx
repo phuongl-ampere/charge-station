@@ -58,8 +58,7 @@ const api = {
       stationId: "station-1",
       stationCode: "ST01",
       stationName: "Demo Station",
-      status: "ONLINE",
-      availability: "AVAILABLE",
+      status: "IN_USE",
       activeSessionId: "session-1",
       relayIds: ["relay-1", "relay-2", "relay-3", "relay-4"],
       telemetry: {
@@ -85,13 +84,11 @@ const api = {
     stationId: "station-1",
     stationCode: "ST01",
     stationName: "Demo Station",
-    status: "ONLINE",
-    availability: "AVAILABLE",
+    status: "IN_USE",
     activeSessionId: "session-1",
     relayIds: ["relay-1", "relay-2", "relay-3", "relay-4"],
     telemetry: { eventAt: "2026-09-27T00:00:00.000Z", totalPowerW: 2350, totalEnergyKwh: 0.1, relays: null },
   }),
-  setDeviceUsage: vi.fn().mockResolvedValue({ deviceId: "core-device-1", inUse: true }),
   controlDeviceRelay: vi.fn().mockResolvedValue({ relayId: "relay-1", enabled: true }),
   createStation: vi.fn().mockResolvedValue({
     id: "station-2",
@@ -274,23 +271,12 @@ describe("AdminDashboard", () => {
 
     expect(await screen.findByRole("heading", { name: "Device core-device-1" })).toBeVisible();
     expect(screen.getAllByText("Charging session session-1").length).toBeGreaterThan(0);
-    expect(screen.getByText("Available")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Mark device in use" }));
-    await waitFor(() =>
-      expect(api.setDeviceUsage).toHaveBeenCalledWith(
-        "core-device-1",
-        true,
-        "admin-token",
-      ),
-    );
-    expect(screen.queryByText("Available")).toBeNull();
+    expect(screen.getAllByText("IN USE").length).toBeGreaterThan(0);
     const relayDemo = screen.getByText("Relay demo").closest("details");
     expect(relayDemo).not.toHaveAttribute("open");
     await user.click(screen.getByText("Relay demo"));
     expect(relayDemo).toHaveAttribute("open");
     expect(screen.getByRole("button", { name: "Turn on relay-1" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Stations" }));
-    expect(screen.getByText("IN USE")).toBeVisible();
   });
 
 });

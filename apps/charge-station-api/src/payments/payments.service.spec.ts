@@ -21,53 +21,6 @@ import type { PayosWebhook } from "./payos.client.js";
 import { PaymentsService } from "./payments.service.js";
 
 describe("PaymentsService webhook processing", () => {
-  it("rejects a new order when the linked station device is in use", async () => {
-    const connector = {
-      id: randomUUID(),
-      code: "ST01-C01",
-      status: "AVAILABLE",
-      station: { deviceId: "core-device-1" },
-      pricingPlan: {
-        hourlyPriceVnd: 5000,
-        allowedDurationsMinutes: [60],
-      },
-    } as Connector;
-    const connectorRepository = {
-      findOne: vi.fn().mockResolvedValue(connector),
-      save: vi.fn(),
-    };
-    const manager = {
-      query: vi
-        .fn()
-        .mockResolvedValueOnce([{ id: connector.id }])
-        .mockResolvedValueOnce([{ availability: "IN_USE" }]),
-      getRepository: vi.fn((entity) => {
-        if (entity === Connector) return connectorRepository;
-        if (entity === Order) return {};
-        if (entity === PaymentTransaction) return {};
-        throw new Error("Unexpected repository");
-      }),
-    };
-    const transaction = vi.fn(async (callback) => callback(manager));
-    const service = new PaymentsService(
-      {
-        transaction,
-        getRepository: () => ({ findOne: vi.fn().mockResolvedValue(connector) }),
-      } as unknown as DataSource,
-      {} as PayosClient,
-    );
-
-    await expect(
-      service.createOrder({ connectorCode: connector.code, durationMinutes: 60 }),
-    ).rejects.toThrow("Station device is in use");
-    expect(manager.query).toHaveBeenNthCalledWith(
-      2,
-      "SELECT availability FROM managed_devices WHERE device_id = $1 FOR UPDATE",
-      [connector.station.deviceId],
-    );
-    expect(connectorRepository.save).not.toHaveBeenCalled();
-  });
-
   it("rejects a new order when the linked device telemetry is stale", async () => {
     const connector = {
       id: randomUUID(),

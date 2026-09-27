@@ -33,6 +33,11 @@ const activeSessionStatuses = new Set<ChargingSessionStatus>([
   ChargingSessionStatus.STOPPING,
   ChargingSessionStatus.DEVICE_OFFLINE,
 ]);
+const deviceInUseSessionStatuses = new Set<ChargingSessionStatus>([
+  ChargingSessionStatus.STARTING,
+  ChargingSessionStatus.CHARGING,
+  ChargingSessionStatus.STOPPING,
+]);
 
 const attentionSessionStatuses = new Set<ChargingSessionStatus>([
   ChargingSessionStatus.START_FAILED,
@@ -137,8 +142,7 @@ export class AdminService {
   }
 
   async getStations() {
-    const [managedDevices, stations, connectors, sessions] = await Promise.all([
-      this.dataSource.getRepository(ManagedDevice).find(),
+    const [stations, connectors, sessions] = await Promise.all([
       this.dataSource
         .getRepository(Station)
         .find({ order: { code: "ASC" } }),
@@ -150,15 +154,17 @@ export class AdminService {
         .find({ order: { updatedAt: "DESC" } }),
     ]);
     const currentSessionByConnector = new Map<string, ChargingSession>();
-    const deviceById = new Map(
-      managedDevices.map((device) => [device.deviceId, device]),
-    );
+    const deviceInUseStationIds = new Set<string>();
     for (const session of sessions) {
       if (
         activeSessionStatuses.has(session.status) &&
         !currentSessionByConnector.has(session.connector.id)
       ) {
         currentSessionByConnector.set(session.connector.id, session);
+      }
+      const stationId = session.connector?.station?.id;
+      if (stationId && deviceInUseSessionStatuses.has(session.status)) {
+        deviceInUseStationIds.add(stationId);
       }
     }
 
@@ -174,10 +180,16 @@ export class AdminService {
       const telemetryResult = telemetryResults[index];
       const telemetry =
         telemetryResult?.status === "fulfilled" ? telemetryResult.value : null;
-      const device = station.deviceId
-        ? deviceById.get(station.deviceId)
-        : null;
-      const status = stationStatus(device?.availability, telemetry);
+      const stationConnectors = connectors.filter(
+        (connector) => connector.station.id === station.id,
+      );
+      const status = stationStatus(
+        deviceInUseStationIds.has(station.id),
+        telemetry,
+        stationConnectors.some(
+          (connector) => connector.status === ConnectorStatus.AVAILABLE,
+        ),
+      );
 
       return {
         id: station.id,
@@ -188,8 +200,7 @@ export class AdminService {
         telemetry: telemetry
           ? { status: "AVAILABLE" as const, ...telemetry }
           : { status: "UNAVAILABLE" as const },
-        connectors: connectors
-          .filter((connector) => connector.station.id === station.id)
+        connectors: stationConnectors
           .map((connector) => ({
             id: connector.id,
             code: connector.code,
@@ -284,7 +295,7 @@ export class AdminService {
       }
       station.deviceId = deviceId;
       const savedStation = await stationRepository.save(station);
-      const device = await this.ensureManagedDevice(deviceRepository, deviceId);
+      await this.ensureManagedDevice(deviceRepository, deviceId);
       let telemetry: Awaited<ReturnType<CoreIotClient["latestTelemetry"]>> = null;
       try {
         telemetry = await this.coreIotClient.latestTelemetry(deviceId);
@@ -293,7 +304,7 @@ export class AdminService {
       }
       return {
         ...savedStation,
-        status: stationStatus(device.availability, telemetry),
+        status: stationStatus(false, telemetry, false),
       };
     });
   }
@@ -526,16 +537,17 @@ function normalizeCode(
 }
 
 function stationStatus(
-  availability: DeviceAvailability | undefined,
+  deviceInUse: boolean,
   telemetry: Awaited<ReturnType<CoreIotClient["latestTelemetry"]>>,
+  hasAvailableConnector: boolean,
 ): "AVAILABLE" | "IN_USE" | "UNAVAILABLE" {
-  if (availability === DeviceAvailability.IN_USE) {
+  if (deviceInUse) {
     return "IN_USE";
   }
   if (
-    availability === DeviceAvailability.AVAILABLE &&
     telemetry &&
-    !isCoreTelemetryStale(telemetry, Date.now())
+    !isCoreTelemetryStale(telemetry, Date.now()) &&
+    hasAvailableConnector
   ) {
     return "AVAILABLE";
   }

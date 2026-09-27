@@ -175,8 +175,7 @@ export interface AdminDevice {
   stationId: string | null;
   stationCode: string | null;
   stationName: string | null;
-  status: "ONLINE" | "OFFLINE";
-  availability: "AVAILABLE" | "IN_USE";
+  status: "AVAILABLE" | "IN_USE" | "OFFLINE";
   activeSessionId: string | null;
   relayIds: string[];
   telemetry: {
@@ -249,11 +248,6 @@ export interface AdminApi {
   ): Promise<AdminDeviceTimelineItem[]>;
   getDevices(accessToken: string): Promise<AdminDevice[]>;
   getDevice(deviceId: string, accessToken: string): Promise<AdminDevice>;
-  setDeviceUsage(
-    deviceId: string,
-    inUse: boolean,
-    accessToken: string,
-  ): Promise<{ deviceId: string; inUse: boolean }>;
   controlDeviceRelay(
     deviceId: string,
     relayId: string,
@@ -484,12 +478,6 @@ export function createAdminApi(origin = localApiOrigin): AdminApi {
         local,
         `/admin/devices/${encodeURIComponent(deviceId)}`,
         { headers: adminHeaders(accessToken) },
-      ),
-    setDeviceUsage: (deviceId, inUse, accessToken) =>
-      request<{ deviceId: string; inUse: boolean }>(
-        local,
-        `/admin/devices/${encodeURIComponent(deviceId)}/${inUse ? "occupy" : "release"}`,
-        { method: "POST", headers: adminHeaders(accessToken) },
       ),
     controlDeviceRelay: (deviceId, relayId, input, accessToken) =>
       request<{ relayId: string; enabled: boolean }>(

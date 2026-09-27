@@ -52,7 +52,6 @@ type AdminOperationsApi = Pick<
   | "getPayments"
   | "getDevices"
   | "getDevice"
-  | "setDeviceUsage"
   | "controlDeviceRelay"
   | "stopSession"
   | "retryStart"
@@ -361,33 +360,6 @@ export function AdminDashboard({
                 accessToken={accessToken}
                 api={api}
                 devices={devices}
-                onAvailabilityChange={(deviceId, availability) =>
-                  {
-                    setDevices((current) =>
-                      current.map((device) =>
-                        device.deviceId === deviceId
-                          ? { ...device, availability }
-                          : device,
-                      ),
-                    );
-                    setStations((current) =>
-                      current.map((station) => {
-                        if (station.deviceId !== deviceId) {
-                          return station;
-                        }
-                        return {
-                          ...station,
-                          status:
-                            availability === "IN_USE"
-                              ? "IN_USE"
-                              : station.telemetry.status === "AVAILABLE"
-                                ? "AVAILABLE"
-                                : "UNAVAILABLE",
-                        };
-                      }),
-                    );
-                  }
-                }
               />
             ) : null}
           </>
@@ -1069,17 +1041,12 @@ function DevicesPanel({
   devices,
   accessToken,
   api,
-  onAvailabilityChange,
 }: {
   devices: AdminDevice[];
   accessToken: string;
-  onAvailabilityChange: (
-    deviceId: string,
-    availability: AdminDevice["availability"],
-  ) => void;
   api: Pick<
     AdminApi,
-    "getDevice" | "setDeviceUsage" | "controlDeviceRelay"
+    "getDevice" | "controlDeviceRelay"
   >;
 }) {
   const [selected, setSelected] = useState<AdminDevice | null>(null);
@@ -1092,19 +1059,6 @@ function DevicesPanel({
       setSelected(await api.getDevice(deviceId, accessToken));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Device detail could not be loaded");
-    }
-  }
-
-  async function setUsage(inUse: boolean): Promise<void> {
-    if (!selected) return;
-    try {
-      setError(null);
-      await api.setDeviceUsage(selected.deviceId, inUse, accessToken);
-      const availability = inUse ? "IN_USE" : "AVAILABLE";
-      setSelected({ ...selected, availability });
-      onAvailabilityChange(selected.deviceId, availability);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Device usage could not be changed");
     }
   }
 
@@ -1135,9 +1089,8 @@ function DevicesPanel({
           <thead>
             <tr>
               <th>Device / station</th>
-              <th>Status</th>
+              <th>Device status</th>
               <th>Charging</th>
-              <th>Usage</th>
               <th aria-label="Open" />
             </tr>
           </thead>
@@ -1148,13 +1101,8 @@ function DevicesPanel({
                   <strong>{device.deviceId}</strong>
                   <small>{device.stationCode ?? "No linked station"} · {device.stationName ?? "—"}</small>
                 </td>
-                <td><span className={`admin-status is-${device.status.toLowerCase()}`}>{device.status}</span></td>
+                <td><span className={`admin-status is-${device.status.toLowerCase()}`}>{device.status.replace("_", " ")}</span></td>
                 <td>{device.activeSessionId ? `Charging session ${device.activeSessionId}` : "Not charging"}</td>
-                <td>
-                  <span className={`admin-status is-${device.availability.toLowerCase()}`}>
-                    {formatDeviceAvailability(device.availability)}
-                  </span>
-                </td>
                 <td><button className="admin-text-button" onClick={() => void open(device.deviceId)} type="button">Open {device.deviceId}</button></td>
               </tr>
             ))}
@@ -1170,11 +1118,8 @@ function DevicesPanel({
               <h2 id="device-detail-heading">Device {selected.deviceId}</h2>
               <small>{selected.activeSessionId ? `Charging session ${selected.activeSessionId}` : "No active charging session"}</small>
             </div>
-            <button className="admin-command-button" onClick={() => void setUsage(selected.availability !== "IN_USE")} type="button">
-              {selected.availability === "IN_USE" ? "Release device" : "Mark device in use"}
-            </button>
           </div>
-          <p>Usage: {formatDeviceAvailability(selected.availability)}</p>
+          <p>Device status: {selected.status.replace("_", " ")}</p>
           <p>Telemetry: {selected.telemetry ? `${formatPower(selected.telemetry.totalPowerW)} total` : "unavailable"}</p>
           <details className="admin-relay-demo">
             <summary>Relay demo</summary>
@@ -1400,10 +1345,6 @@ function formatPower(value: number | null): string {
 
 function formatEnergy(value: number | null): string {
   return value === null ? "No reading" : `${value.toFixed(3)} kWh`;
-}
-
-function formatDeviceAvailability(value: AdminDevice["availability"]): string {
-  return value === "IN_USE" ? "In use" : "Available";
 }
 
 function formatDuration(seconds: number): string {

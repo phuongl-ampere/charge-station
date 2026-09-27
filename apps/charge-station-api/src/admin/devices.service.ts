@@ -11,7 +11,6 @@ import { DataSource } from "typeorm";
 import {
   ChargingSession,
   ChargingSessionStatus,
-  DeviceAvailability,
   ManagedDevice,
   Station,
 } from "../database/data-source.js";
@@ -32,14 +31,18 @@ const activeStatuses = new Set<ChargingSessionStatus>([
   ChargingSessionStatus.STOPPING,
   ChargingSessionStatus.DEVICE_OFFLINE,
 ]);
+const deviceInUseStatuses = new Set<ChargingSessionStatus>([
+  ChargingSessionStatus.STARTING,
+  ChargingSessionStatus.CHARGING,
+  ChargingSessionStatus.STOPPING,
+]);
 
 export type DeviceListItem = {
   deviceId: string;
   stationId: string | null;
   stationCode: string | null;
   stationName: string | null;
-  status: "ONLINE" | "OFFLINE";
-  availability: DeviceAvailability;
+  status: "AVAILABLE" | "IN_USE" | "OFFLINE";
   activeSessionId: string | null;
   telemetry: CoreTelemetry | null;
   relayIds: ["relay-1", "relay-2", "relay-3", "relay-4"];
@@ -79,19 +82,21 @@ export class DevicesService {
       managedDevices.map(async (managedDevice) => {
           const station = stationByDeviceId.get(managedDevice.deviceId);
           const telemetry = await this.readTelemetry(managedDevice.deviceId);
+          const activeSession = station
+            ? activeSessionByStationId.get(station.id) ?? null
+            : null;
           return {
             deviceId: managedDevice.deviceId,
             stationId: station?.id ?? null,
             stationCode: station?.code ?? null,
             stationName: station?.name ?? null,
             status:
-              telemetry && !isCoreTelemetryStale(telemetry, Date.now())
-                ? "ONLINE"
-                : "OFFLINE",
-            availability: managedDevice.availability,
-            activeSessionId: station
-              ? activeSessionByStationId.get(station.id)?.id ?? null
-              : null,
+              activeSession && deviceInUseStatuses.has(activeSession.status)
+                ? "IN_USE"
+                : telemetry && !isCoreTelemetryStale(telemetry, Date.now())
+                  ? "AVAILABLE"
+                  : "OFFLINE",
+            activeSessionId: activeSession?.id ?? null,
             telemetry,
             relayIds: ["relay-1", "relay-2", "relay-3", "relay-4"],
           };
@@ -107,26 +112,6 @@ export class DevicesService {
       throw new NotFoundException("Device not found");
     }
     return device;
-  }
-
-  async setInUse(
-    deviceId: string,
-    inUse: boolean,
-  ): Promise<{ deviceId: string; inUse: boolean }> {
-    return this.dataSource.transaction(async (manager) => {
-      const device = await manager.getRepository(ManagedDevice).findOne({
-        where: { deviceId },
-        lock: { mode: "pessimistic_write" },
-      });
-      if (!device) {
-        throw new NotFoundException("Device not found");
-      }
-      device.availability = inUse
-        ? DeviceAvailability.IN_USE
-        : DeviceAvailability.AVAILABLE;
-      await manager.getRepository(ManagedDevice).save(device);
-      return { deviceId, inUse };
-    });
   }
 
   async controlRelay(

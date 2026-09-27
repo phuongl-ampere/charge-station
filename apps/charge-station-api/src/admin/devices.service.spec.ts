@@ -79,44 +79,30 @@ describe("DevicesService", () => {
       expect.objectContaining({
         deviceId: "core-device-1",
         stationCode: "ST01",
-        status: "ONLINE",
-        availability: DeviceAvailability.AVAILABLE,
+        status: "IN_USE",
         activeSessionId: "session-1",
         telemetry: expect.objectContaining({ totalPowerW: 2350 }),
       }),
     ]);
   });
 
-  it("marks a device in use while allowing an operator to enable a relay demo", async () => {
+  it("allows relay demo control without changing the read-only device status", async () => {
     const managedDevice = {
       deviceId: "core-device-1",
       availability: DeviceAvailability.AVAILABLE,
     } as ManagedDevice;
     const deviceRepository = {
-      findOne: vi.fn().mockResolvedValue(managedDevice),
       findOneBy: vi.fn().mockResolvedValue(managedDevice),
       save: vi.fn().mockImplementation(async (value) => value),
     };
     const core = { setRelay: vi.fn() };
-    const manager = { getRepository: () => deviceRepository };
-    const transaction = vi.fn(async (callback) => callback(manager));
     const service = new DevicesService(
       {
-        transaction,
         getRepository: () => deviceRepository,
       } as unknown as DataSource,
       core as unknown as CoreIotClient,
     );
 
-    await expect(service.setInUse("core-device-1", true)).resolves.toEqual({
-      deviceId: "core-device-1",
-      inUse: true,
-    });
-    expect(transaction).toHaveBeenCalledTimes(1);
-    expect(deviceRepository.findOne).toHaveBeenCalledWith({
-      where: { deviceId: "core-device-1" },
-      lock: { mode: "pessimistic_write" },
-    });
     await service.controlRelay("core-device-1", "relay-4", {
       enabled: true,
       durationSeconds: 60,

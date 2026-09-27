@@ -6,8 +6,6 @@ import type { Repository } from "typeorm";
 import {
   Connector,
   ConnectorStatus,
-  DeviceAvailability,
-  ManagedDevice,
   Station,
 } from "../database/data-source.js";
 import { CoreIotClient } from "../iot/core-iot.client.js";
@@ -21,8 +19,6 @@ export class StationScanService {
     private readonly stationRepository: Repository<Station>,
     @InjectRepository(Connector)
     private readonly connectorRepository: Repository<Connector>,
-    @InjectRepository(ManagedDevice)
-    private readonly deviceRepository: Repository<ManagedDevice>,
     private readonly stationQrService: StationQrService,
     private readonly coreIotClient: CoreIotClient,
   ) {}
@@ -44,9 +40,6 @@ export class StationScanService {
       throw unavailableStationQr();
     }
 
-    const device = station.deviceId
-      ? await this.deviceRepository.findOneBy({ deviceId: station.deviceId })
-      : null;
     let telemetry = null;
     try {
       telemetry = station.deviceId
@@ -56,7 +49,6 @@ export class StationScanService {
       telemetry = null;
     }
     const deviceAvailable =
-      device?.availability === DeviceAvailability.AVAILABLE &&
       telemetry !== null &&
       !isCoreTelemetryStale(telemetry, Date.now());
 

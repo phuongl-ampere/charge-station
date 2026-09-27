@@ -5,8 +5,6 @@ import type { Repository } from "typeorm";
 import {
   Connector,
   ConnectorStatus,
-  DeviceAvailability,
-  ManagedDevice,
   Station,
 } from "../database/data-source.js";
 import { StationQrService } from "./station-qr.service.js";
@@ -52,12 +50,6 @@ describe("StationScanService", () => {
     const connectorRepository = {
       find: vi.fn().mockResolvedValue([connector]),
     } as unknown as Repository<Connector>;
-    const deviceRepository = {
-      findOneBy: vi.fn().mockResolvedValue({
-        deviceId: "core-device-1",
-        availability: DeviceAvailability.AVAILABLE,
-      } as ManagedDevice),
-    } as unknown as Repository<ManagedDevice>;
     const core = {
       latestTelemetry: vi.fn().mockResolvedValue({
         eventAt: new Date().toISOString(),
@@ -67,7 +59,6 @@ describe("StationScanService", () => {
     const service = new StationScanService(
       stationRepository,
       connectorRepository,
-      deviceRepository,
       qrService,
       core,
     );
@@ -100,7 +91,6 @@ describe("StationScanService", () => {
     const service = new StationScanService(
       stationRepository,
       {} as Repository<Connector>,
-      {} as Repository<ManagedDevice>,
       qrService,
       {} as never,
     );
@@ -112,40 +102,6 @@ describe("StationScanService", () => {
     await expect(service.getStationScan(token)).rejects.toThrow(
       NotFoundException,
     );
-  });
-
-  it("marks connectors offline when the linked device is in use", async () => {
-    const station = {
-      id: "3d20d6e7-5cbe-4fa2-af18-e8d1ab0ddbe6",
-      code: "ST01",
-      name: "Riverside Station",
-      deviceId: "core-device-1",
-      qrVersion: 2,
-    } as Station;
-    const connector = {
-      id: "connector-1",
-      code: "ST01-C01",
-      status: ConnectorStatus.AVAILABLE,
-      station,
-    } as Connector;
-    const qrService = new StationQrService(createTokenRepository() as never);
-    const service = new StationScanService(
-      { findOneBy: vi.fn().mockResolvedValue(station) } as never,
-      { find: vi.fn().mockResolvedValue([connector]) } as never,
-      {
-        findOneBy: vi.fn().mockResolvedValue({
-          deviceId: "core-device-1",
-          availability: DeviceAvailability.IN_USE,
-        }),
-      } as never,
-      qrService,
-      { latestTelemetry: vi.fn().mockResolvedValue({ eventAt: new Date().toISOString() }) } as never,
-    );
-    const { token } = await qrService.issue(station.id, station.qrVersion);
-
-    await expect(service.getStationScan(token)).resolves.toMatchObject({
-      connectors: [expect.objectContaining({ status: ConnectorStatus.OFFLINE })],
-    });
   });
 
   it("marks connectors offline when device telemetry is stale", async () => {
@@ -166,12 +122,6 @@ describe("StationScanService", () => {
     const service = new StationScanService(
       { findOneBy: vi.fn().mockResolvedValue(station) } as never,
       { find: vi.fn().mockResolvedValue([connector]) } as never,
-      {
-        findOneBy: vi.fn().mockResolvedValue({
-          deviceId: "core-device-1",
-          availability: DeviceAvailability.AVAILABLE,
-        }),
-      } as never,
       qrService,
       {
         latestTelemetry: vi.fn().mockResolvedValue({

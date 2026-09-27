@@ -17,7 +17,6 @@ import {
   ChargingSessionStatus,
   Connector,
   ConnectorStatus,
-  DeviceAvailability,
   DeviceCommand,
   DeviceCommandStatus,
   Order,
@@ -334,24 +333,11 @@ export class PaymentsService {
       if (!connector) {
         throw new NotFoundException("Connector not found");
       }
-      const deviceId = connector.station?.deviceId;
-      if (deviceId) {
-        const deviceAvailability = await lockManagedDeviceAvailability(
-          manager,
-          deviceId,
-        );
-        if (deviceAvailability === DeviceAvailability.IN_USE) {
-          throw new BadRequestException("Station device is in use");
-        }
-        if (deviceAvailability !== DeviceAvailability.AVAILABLE) {
-          throw new BadRequestException("Station device is unavailable");
-        }
-        if (
-          telemetry !== undefined &&
-          (!telemetry || isCoreTelemetryStale(telemetry, Date.now()))
-        ) {
-          throw new BadRequestException("Station device is unavailable");
-        }
+      if (
+        telemetry !== undefined &&
+        (!telemetry || isCoreTelemetryStale(telemetry, Date.now()))
+      ) {
+        throw new BadRequestException("Station device is unavailable");
       }
       if (connector.status !== ConnectorStatus.AVAILABLE) {
         throw new BadRequestException("Connector is not available");
@@ -1169,20 +1155,6 @@ async function lockConnectorIdById(
   return rows[0]?.id ?? null;
 }
 
-async function lockManagedDeviceAvailability(
-  manager: EntityManager,
-  deviceId: string,
-): Promise<DeviceAvailability | null> {
-  const rows = await manager.query(
-    "SELECT availability FROM managed_devices WHERE device_id = $1 FOR UPDATE",
-    [deviceId],
-  );
-  const availability = rows[0]?.availability;
-  return availability === DeviceAvailability.AVAILABLE ||
-    availability === DeviceAvailability.IN_USE
-    ? availability
-    : null;
-}
 
 async function lockPaymentIdByOrderCode(
   manager: EntityManager,

@@ -3,7 +3,6 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 
 import {
   Connector,
-  ManagedDevice,
   Station,
   StationQrToken,
 } from "../database/data-source.js";
@@ -15,7 +14,7 @@ import { StationsController } from "./stations.controller.js";
 @Module({
   imports: [
     IotModule,
-    TypeOrmModule.forFeature([Connector, ManagedDevice, Station, StationQrToken]),
+    TypeOrmModule.forFeature([Connector, Station, StationQrToken]),
   ],
   controllers: [StationsController],
   providers: [StationQrService, StationScanService],
