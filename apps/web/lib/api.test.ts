@@ -53,13 +53,13 @@ describe("retryStart", () => {
 });
 
 describe("admin devices", () => {
-  it("lists devices and sends hold or relay control with the admin token", async () => {
+  it("lists devices and sends usage or relay control with the admin token", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({ ok: true, json: async () => [] })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ deviceId: "device-1", held: true }),
+        json: async () => ({ deviceId: "device-1", inUse: true }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -73,9 +73,9 @@ describe("admin devices", () => {
     const api = createAdminApi(localApiOrigin);
 
     await expect(api.getDevices("admin-token")).resolves.toEqual([]);
-    await expect(api.setDeviceHold("device-1", true, "admin-token")).resolves.toEqual({
+    await expect(api.setDeviceUsage("device-1", true, "admin-token")).resolves.toEqual({
       deviceId: "device-1",
-      held: true,
+      inUse: true,
     });
     await api.controlDeviceRelay("device-1", "relay-2", {
       enabled: true,
@@ -92,7 +92,7 @@ describe("admin devices", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      `${localApiOrigin}/admin/devices/device-1/hold`,
+      `${localApiOrigin}/admin/devices/device-1/occupy`,
       expect.objectContaining({ method: "POST" }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(

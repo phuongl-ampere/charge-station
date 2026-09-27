@@ -52,7 +52,7 @@ type AdminOperationsApi = Pick<
   | "getPayments"
   | "getDevices"
   | "getDevice"
-  | "setDeviceHold"
+  | "setDeviceUsage"
   | "controlDeviceRelay"
   | "stopSession"
   | "retryStart"
@@ -1040,7 +1040,7 @@ function DevicesPanel({
   accessToken: string;
   api: Pick<
     AdminApi,
-    "getDevice" | "setDeviceHold" | "controlDeviceRelay"
+    "getDevice" | "setDeviceUsage" | "controlDeviceRelay"
   >;
 }) {
   const [selected, setSelected] = useState<AdminDevice | null>(null);
@@ -1056,14 +1056,14 @@ function DevicesPanel({
     }
   }
 
-  async function setHold(held: boolean): Promise<void> {
+  async function setUsage(inUse: boolean): Promise<void> {
     if (!selected) return;
     try {
       setError(null);
-      await api.setDeviceHold(selected.deviceId, held, accessToken);
-      setSelected({ ...selected, held });
+      await api.setDeviceUsage(selected.deviceId, inUse, accessToken);
+      setSelected({ ...selected, inUse });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Device hold could not be changed");
+      setError(cause instanceof Error ? cause.message : "Device usage could not be changed");
     }
   }
 
@@ -1096,7 +1096,7 @@ function DevicesPanel({
               <th>Device / station</th>
               <th>Status</th>
               <th>Charging</th>
-              <th>Hold</th>
+              <th>Usage</th>
               <th aria-label="Open" />
             </tr>
           </thead>
@@ -1109,7 +1109,11 @@ function DevicesPanel({
                 </td>
                 <td><span className={`admin-status is-${device.status.toLowerCase()}`}>{device.status}</span></td>
                 <td>{device.activeSessionId ? `Charging session ${device.activeSessionId}` : "Not charging"}</td>
-                <td>{device.held ? "HELD" : "RELEASED"}</td>
+                <td>
+                  <span className={`admin-status is-${device.inUse ? "in-use" : "available"}`}>
+                    {device.inUse ? "In use" : "Available"}
+                  </span>
+                </td>
                 <td><button className="admin-text-button" onClick={() => void open(device.deviceId)} type="button">Open {device.deviceId}</button></td>
               </tr>
             ))}
@@ -1125,28 +1129,32 @@ function DevicesPanel({
               <h2 id="device-detail-heading">Device {selected.deviceId}</h2>
               <small>{selected.activeSessionId ? `Charging session ${selected.activeSessionId}` : "No active charging session"}</small>
             </div>
-            <button className="admin-command-button" onClick={() => void setHold(!selected.held)} type="button">
-              {selected.held ? "Release device" : "Hold device"}
+            <button className="admin-command-button" onClick={() => void setUsage(!selected.inUse)} type="button">
+              {selected.inUse ? "Release device" : "Mark device in use"}
             </button>
           </div>
-          <p>Configuration: four fixed relays; manual ON defaults to a 15 minute timer.</p>
+          <p>Usage: {selected.inUse ? "In use" : "Available"}</p>
           <p>Telemetry: {selected.telemetry ? `${formatPower(selected.telemetry.totalPowerW)} total` : "unavailable"}</p>
-          <div className="admin-connector-list">
-            {selected.relayIds.map((relayId) => {
-              const relay = selected.telemetry?.relays?.[relayId];
-              const enabled = relay?.enabled === true;
-              return (
-                <div className="admin-connector-row" key={relayId}>
-                  <div className="admin-connector-title">
-                    <strong>{relayId}</strong>
-                    <small>{enabled ? "ON" : "OFF"} · {formatPower(relay?.powerW ?? null)}</small>
+          <details className="admin-relay-demo">
+            <summary>Relay demo</summary>
+            <p>Technical controls only. ON runs for 15 minutes by default.</p>
+            <div className="admin-relay-list">
+              {selected.relayIds.map((relayId) => {
+                const relay = selected.telemetry?.relays?.[relayId];
+                const enabled = relay?.enabled === true;
+                return (
+                  <div className="admin-relay-row" key={relayId}>
+                    <div className="admin-relay-title">
+                      <strong>{relayId}</strong>
+                      <small>{enabled ? "ON" : "OFF"} · {formatPower(relay?.powerW ?? null)}</small>
+                    </div>
+                    <button disabled={busyRelay === relayId} onClick={() => void control(relayId, true)} type="button">Turn on {relayId}</button>
+                    <button disabled={busyRelay === relayId} onClick={() => void control(relayId, false)} type="button">Turn off {relayId}</button>
                   </div>
-                  <button disabled={busyRelay === relayId || selected.held} onClick={() => void control(relayId, true)} type="button">Turn on {relayId}</button>
-                  <button disabled={busyRelay === relayId} onClick={() => void control(relayId, false)} type="button">Turn off {relayId}</button>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          </details>
         </section>
       ) : null}
     </div>

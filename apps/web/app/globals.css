@@ -1009,6 +1009,50 @@ input {
 .admin-connector-title strong {
   font: 800 14px var(--narrow);
 }
+.admin-relay-demo {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+}
+.admin-relay-demo summary {
+  padding: 11px 14px;
+  cursor: pointer;
+  font: 800 12px var(--narrow);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.admin-relay-demo > p {
+  margin: 0;
+  padding: 0 14px 10px;
+  color: var(--steel);
+  font-size: 11px;
+}
+.admin-relay-list {
+  border-top: 1px solid var(--line);
+}
+.admin-relay-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+}
+.admin-relay-row:first-child {
+  border-top: 0;
+}
+.admin-relay-title {
+  display: grid;
+  gap: 2px;
+}
+.admin-relay-title strong {
+  font: 800 12px var(--narrow);
+}
+.admin-relay-title small {
+  color: var(--steel);
+  font-size: 10px;
+}
 .admin-status {
   display: inline-flex;
   width: fit-content;
@@ -1026,6 +1070,7 @@ input {
   color: var(--signal);
 }
 .admin-status.is-occupied,
+.admin-status.is-in-use,
 .admin-status.is-pending,
 .admin-status.is-starting,
 .admin-status.is-stopping {
@@ -1404,6 +1449,9 @@ input {
   }
   .admin-connector-title {
     grid-column: span 2;
+  }
+  .admin-relay-row {
+    grid-template-columns: 1fr auto auto;
   }
   .admin-idle-readout {
     grid-column: span 2;

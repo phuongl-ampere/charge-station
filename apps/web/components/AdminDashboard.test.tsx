@@ -58,7 +58,7 @@ const api = {
       stationCode: "ST01",
       stationName: "Demo Station",
       status: "ONLINE",
-      held: false,
+      inUse: false,
       activeSessionId: "session-1",
       relayIds: ["relay-1", "relay-2", "relay-3", "relay-4"],
       telemetry: {
@@ -85,12 +85,12 @@ const api = {
     stationCode: "ST01",
     stationName: "Demo Station",
     status: "ONLINE",
-    held: false,
+    inUse: false,
     activeSessionId: "session-1",
     relayIds: ["relay-1", "relay-2", "relay-3", "relay-4"],
     telemetry: { eventAt: "2026-09-27T00:00:00.000Z", totalPowerW: 2350, totalEnergyKwh: 0.1, relays: null },
   }),
-  setDeviceHold: vi.fn().mockResolvedValue({ deviceId: "core-device-1", held: true }),
+  setDeviceUsage: vi.fn().mockResolvedValue({ deviceId: "core-device-1", inUse: true }),
   controlDeviceRelay: vi.fn().mockResolvedValue({ relayId: "relay-1", enabled: true }),
   createStation: vi.fn().mockResolvedValue({
     id: "station-2",
@@ -259,7 +259,7 @@ describe("AdminDashboard", () => {
     ).toBeVisible();
   });
 
-  it("opens device detail with status, charging, and relay controls", async () => {
+  it("opens device detail with usage state and compact relay demo controls", async () => {
     const user = userEvent.setup();
     render(<AdminDashboard accessToken="admin-token" api={api} onLogout={vi.fn()} />);
 
@@ -269,8 +269,20 @@ describe("AdminDashboard", () => {
 
     expect(await screen.findByRole("heading", { name: "Device core-device-1" })).toBeVisible();
     expect(screen.getAllByText("Charging session session-1").length).toBeGreaterThan(0);
+    expect(screen.getByText("Available")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Mark device in use" }));
+    await waitFor(() =>
+      expect(api.setDeviceUsage).toHaveBeenCalledWith(
+        "core-device-1",
+        true,
+        "admin-token",
+      ),
+    );
+    const relayDemo = screen.getByText("Relay demo").closest("details");
+    expect(relayDemo).not.toHaveAttribute("open");
+    await user.click(screen.getByText("Relay demo"));
+    expect(relayDemo).toHaveAttribute("open");
     expect(screen.getByRole("button", { name: "Turn on relay-1" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Hold device" })).toBeVisible();
   });
 
 });
