@@ -23,6 +23,7 @@ import { AddDeviceCommandDispatchClaim } from "./migrations/007-device-command-d
 import { AddStationQrVersion } from "./migrations/008-station-qr-version.js";
 import { AddStationQrTokens } from "./migrations/010-station-qr-tokens.js";
 import { AddDeviceHoldAndRemoveRelaySchedule } from "./migrations/011-device-hold.js";
+import { RenameDeviceHoldToDeviceUsage } from "./migrations/012-device-usage.js";
 
 export enum UserRole {
   CUSTOMER = "CUSTOMER",
@@ -118,8 +119,8 @@ export class Station {
   @Column({ name: "qr_version", type: "integer", default: 1 })
   qrVersion!: number;
 
-  @Column({ name: "device_hold", type: "boolean", default: false })
-  deviceHold!: boolean;
+  @Column({ name: "device_in_use", type: "boolean", default: false })
+  deviceInUse!: boolean;
 
   @OneToMany(() => Connector, (connector) => connector.station)
   connectors!: Connector[];
@@ -477,6 +478,7 @@ export const migrations = [
   AddStationQrVersion,
   AddStationQrTokens,
   AddDeviceHoldAndRemoveRelaySchedule,
+  RenameDeviceHoldToDeviceUsage,
 ];
 
 export const databaseOptions: DataSourceOptions = {

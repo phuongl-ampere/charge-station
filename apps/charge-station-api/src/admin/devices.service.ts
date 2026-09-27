@@ -36,7 +36,7 @@ export type DeviceListItem = {
   stationCode: string;
   stationName: string;
   status: "ONLINE" | "OFFLINE";
-  held: boolean;
+  inUse: boolean;
   activeSessionId: string | null;
   telemetry: CoreTelemetry | null;
   relayIds: ["relay-1", "relay-2", "relay-3", "relay-4"];
@@ -73,7 +73,7 @@ export class DevicesService {
             stationCode: station.code,
             stationName: station.name,
             status: telemetry ? "ONLINE" : "OFFLINE",
-            held: station.deviceHold,
+            inUse: station.deviceInUse,
             activeSessionId: activeSessionByStationId.get(station.id)?.id ?? null,
             telemetry,
             relayIds: ["relay-1", "relay-2", "relay-3", "relay-4"],
@@ -92,11 +92,14 @@ export class DevicesService {
     return device;
   }
 
-  async setHold(deviceId: string, held: boolean): Promise<{ deviceId: string; held: boolean }> {
+  async setInUse(
+    deviceId: string,
+    inUse: boolean,
+  ): Promise<{ deviceId: string; inUse: boolean }> {
     const station = await this.requireStation(deviceId);
-    station.deviceHold = held;
+    station.deviceInUse = inUse;
     await this.dataSource.getRepository(Station).save(station);
-    return { deviceId, held };
+    return { deviceId, inUse };
   }
 
   async controlRelay(
@@ -107,10 +110,7 @@ export class DevicesService {
     if (!relayIds.has(relayId)) {
       throw new BadRequestException("Unknown relay");
     }
-    const station = await this.requireStation(deviceId);
-    if (station.deviceHold && input.enabled) {
-      throw new BadRequestException("Device is held");
-    }
+    await this.requireStation(deviceId);
     const durationSeconds = input.enabled
       ? input.durationSeconds ?? DEFAULT_MANUAL_DURATION_SECONDS
       : undefined;

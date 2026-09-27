@@ -20,7 +20,7 @@ describe("DevicesService", () => {
       code: "ST01",
       name: "Riverside",
       deviceId: "core-device-1",
-      deviceHold: false,
+      deviceInUse: false,
     } as Station;
     const activeSession = {
       id: "session-1",
@@ -72,20 +72,20 @@ describe("DevicesService", () => {
         deviceId: "core-device-1",
         stationCode: "ST01",
         status: "ONLINE",
-        held: false,
+        inUse: false,
         activeSessionId: "session-1",
         telemetry: expect.objectContaining({ totalPowerW: 2350 }),
       }),
     ]);
   });
 
-  it("holds a device and prevents an operator from enabling a relay", async () => {
+  it("marks a device in use while allowing an operator to enable a relay demo", async () => {
     const station = {
       id: "station-1",
       code: "ST01",
       name: "Riverside",
       deviceId: "core-device-1",
-      deviceHold: false,
+      deviceInUse: false,
     } as Station;
     const stationRepository = {
       findOneBy: vi.fn().mockResolvedValue(station),
@@ -99,16 +99,22 @@ describe("DevicesService", () => {
       core as unknown as CoreIotClient,
     );
 
-    await expect(service.setHold("core-device-1", true)).resolves.toMatchObject({
-      held: true,
+    await expect(service.setInUse("core-device-1", true)).resolves.toEqual({
+      deviceId: "core-device-1",
+      inUse: true,
     });
-    await expect(
-      service.controlRelay("core-device-1", "relay-4", {
+    await service.controlRelay("core-device-1", "relay-4", {
+      enabled: true,
+      durationSeconds: 60,
+    });
+    expect(core.setRelay).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceId: "core-device-1",
+        relayId: "relay-4",
         enabled: true,
         durationSeconds: 60,
       }),
-    ).rejects.toThrow("Device is held");
-    expect(core.setRelay).not.toHaveBeenCalled();
+    );
   });
 
   it("returns service unavailable when Core cannot acknowledge a relay command", async () => {
@@ -116,7 +122,7 @@ describe("DevicesService", () => {
       findOneBy: vi.fn().mockResolvedValue({
         id: "station-1",
         deviceId: "core-device-1",
-        deviceHold: false,
+        deviceInUse: false,
       } as Station),
     };
     const service = new DevicesService(

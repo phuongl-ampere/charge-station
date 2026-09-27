@@ -28,14 +28,14 @@ export class DevicesController {
     return this.devices.get(deviceId);
   }
 
-  @Post(":deviceId/hold")
-  hold(@Param("deviceId") deviceId: string) {
-    return this.devices.setHold(deviceId, true);
+  @Post(":deviceId/occupy")
+  occupy(@Param("deviceId") deviceId: string) {
+    return this.devices.setInUse(deviceId, true);
   }
 
   @Post(":deviceId/release")
   release(@Param("deviceId") deviceId: string) {
-    return this.devices.setHold(deviceId, false);
+    return this.devices.setInUse(deviceId, false);
   }
 
   @Post(":deviceId/relays/:relayId")
