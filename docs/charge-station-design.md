@@ -68,7 +68,7 @@ The backend persists `startedAt` and `expectedEndAt` for UI display, monitoring 
 
 ## Payment and Charging Flow
 
-1. The physical station QR contains an AES-256-GCM encrypted station token, not a station or connector code. The frontend resolves the token, displays selectable connectors for that station, and fetches availability and pricing.
+1. The physical station QR contains a 32-character opaque station token, not a station or connector code. The server stores only its SHA-256 digest, resolves the token to a station/version mapping, then returns selectable connectors and pricing.
 2. The frontend submits the selected `connectorCode` and `durationMinutes` to create an order. The backend verifies availability and calculates the amount.
 3. The backend creates an `Order` with `PENDING_PAYMENT`, creates a PayOS payment link, and returns its `checkoutUrl`.
 4. The customer pays. PayOS sends a webhook to Charge Station.
@@ -112,7 +112,7 @@ CHARGING -> DEVICE_OFFLINE
 | Method | Path                                | Purpose                                                                          |
 | ------ | ----------------------------------- | -------------------------------------------------------------------------------- |
 | `GET`  | `/public/connectors/:connectorCode` | Get connector availability, pricing, and permitted durations.                    |
-| `GET`  | `/public/stations/scan/:token`      | Resolve an encrypted station QR and return its selectable connectors.            |
+| `GET`  | `/public/stations/scan/:token`      | Resolve an opaque station QR and return its selectable connectors.               |
 | `POST` | `/orders`                           | Create an order and payment request. Require JWT if the system requires sign-in. |
 | `GET`  | `/orders/:id`                       | Get order and payment status.                                                    |
 | `GET`  | `/sessions/:id`                     | Get charging status and estimated remaining time.                                |
@@ -157,7 +157,7 @@ they never bypass Core IoT or alter the device-owned timer.
 | `POST` | `/admin/sessions/:id/stop`         | Request a normal IoT stop command.                                   |
 | `POST` | `/admin/sessions/:id/retry-start`  | Retry a fresh recoverable failed start command.                      |
 | `POST` | `/admin/stations`                  | Create a station from its code and optional device ID.               |
-| `GET`  | `/admin/stations/:id/qr`           | Generate the encrypted station scan URL used to render a QR code.    |
+| `GET`  | `/admin/stations/:id/qr`           | Generate the opaque station scan URL used to render a QR code.       |
 | `POST` | `/admin/stations/:id/qr/rotate`    | Increment the QR version and invalidate all prior station QR tokens. |
 
 For local Compose, the idempotent seed creates an `ADMIN` account only when
@@ -168,8 +168,10 @@ Station creation and station-QR endpoints require the `ADMIN` role. Creating a
 station uses the station code as its stored display name and provisions the
 internal default charge point `<stationCode>-C01` required by the existing
 payment and IoT model; neither field is entered by an administrator. A QR token
-encrypts `{ stationId, qrVersion }` using AES-256-GCM with
-`STATION_QR_ENCRYPTION_KEY`, a unique 64-character hexadecimal key. The token
+derives a 24-byte HMAC value from `{ stationId, qrVersion }` using
+`STATION_QR_ENCRYPTION_KEY`, a unique 64-character hexadecimal secret. The token
+is encoded as a 32-character base64url value and only its SHA-256 digest is
+stored server-side. The token
 is opaque, URL-safe, and does not expose station or connector codes. Rotating a
 station QR increments `stations.qrVersion`, so any previously printed token
 resolves as `404` without needing to persist individual QR tokens.
@@ -281,7 +283,7 @@ If Socket.IO disconnects, the frontend polls `GET /orders/:id` and `GET /session
 - Process PayOS webhook callbacks idempotently and retain the raw payload for reconciliation.
 - Never trust `amount`, `price`, or payment results supplied by the frontend.
 - Protect user APIs with JWT; use PayOS webhook signatures and Core bearer-token authorization for device commands and telemetry.
-- Use `STATION_QR_ENCRYPTION_KEY` for station QR encryption. Do not expose station codes in physical QR URLs; rotate the QR version when a printed QR must be revoked.
+- Use `STATION_QR_ENCRYPTION_KEY` as the station QR token secret. Do not expose station codes in physical QR URLs; rotate the QR version when a printed QR must be revoked.
 - Devices must use `commandId` to prevent executing a relay command twice.
 - The backend retries commands with a bounded retry policy; retries never change the session `durationSeconds`.
 - If a Core two-way response does not arrive before its deadline, mark the session `START_FAILED` or `DEVICE_OFFLINE`, and notify the frontend and operations users.

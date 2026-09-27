@@ -51,6 +51,47 @@ const api = {
   getSessions: vi.fn().mockResolvedValue([]),
   getPayments: vi.fn().mockResolvedValue([]),
   getDeviceTimeline: vi.fn().mockResolvedValue([]),
+  getDevices: vi.fn().mockResolvedValue([
+    {
+      deviceId: "core-device-1",
+      stationId: "station-1",
+      stationCode: "ST01",
+      stationName: "Demo Station",
+      status: "ONLINE",
+      held: false,
+      activeSessionId: "session-1",
+      relayIds: ["relay-1", "relay-2", "relay-3", "relay-4"],
+      telemetry: {
+        eventAt: "2026-09-27T00:00:00.000Z",
+        totalPowerW: 2350,
+        totalEnergyKwh: 0.1,
+        relays: {
+          "relay-1": {
+            enabled: true,
+            remainingSeconds: 60,
+            voltageV: 230.4,
+            currentA: 10.2,
+            powerW: 2350,
+            energyKwh: 0.1,
+            source: "MANUAL",
+          },
+        },
+      },
+    },
+  ]),
+  getDevice: vi.fn().mockResolvedValue({
+    deviceId: "core-device-1",
+    stationId: "station-1",
+    stationCode: "ST01",
+    stationName: "Demo Station",
+    status: "ONLINE",
+    held: false,
+    activeSessionId: "session-1",
+    relayIds: ["relay-1", "relay-2", "relay-3", "relay-4"],
+    telemetry: { eventAt: "2026-09-27T00:00:00.000Z", totalPowerW: 2350, totalEnergyKwh: 0.1, relays: null },
+  }),
+  setDeviceHold: vi.fn().mockResolvedValue({ deviceId: "core-device-1", held: true }),
+  controlDeviceRelay: vi.fn().mockResolvedValue({ relayId: "relay-1", enabled: true }),
   createStation: vi.fn().mockResolvedValue({
     id: "station-2",
     code: "ST02",
@@ -58,6 +99,14 @@ const api = {
     deviceId: "dev_ST02",
     telemetry: { status: "UNAVAILABLE" },
     qrVersion: 1,
+    connectors: [],
+  }),
+  linkStationDevice: vi.fn().mockResolvedValue({
+    id: "station-1",
+    code: "ST01",
+    name: "Demo Station",
+    deviceId: "core-device-1",
+    telemetry: { status: "UNAVAILABLE" },
     connectors: [],
   }),
   getStationQr: vi.fn().mockResolvedValue({
@@ -209,4 +258,19 @@ describe("AdminDashboard", () => {
       ),
     ).toBeVisible();
   });
+
+  it("opens device detail with status, charging, and relay controls", async () => {
+    const user = userEvent.setup();
+    render(<AdminDashboard accessToken="admin-token" api={api} onLogout={vi.fn()} />);
+
+    await user.click(await screen.findByRole("button", { name: "Device activity" }));
+    expect(await screen.findByText("core-device-1")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Open core-device-1" }));
+
+    expect(await screen.findByRole("heading", { name: "Device core-device-1" })).toBeVisible();
+    expect(screen.getAllByText("Charging session session-1").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Turn on relay-1" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Hold device" })).toBeVisible();
+  });
+
 });

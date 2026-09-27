@@ -7,15 +7,22 @@ async function mockLocalApi(
   await page.context().route("http://localhost:4000/**", async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
-    if (method === "GET" && url.pathname === "/public/connectors/ST01-C01") {
+    if (
+      method === "GET" &&
+      url.pathname === "/public/stations/scan/ciphertext-token"
+    ) {
       await route.fulfill({
         contentType: "application/json",
         body: JSON.stringify({
-          stationCode: "ST01",
-          connectorCode: "ST01-C01",
-          status: "AVAILABLE",
-          allowedDurationsMinutes: [60, 120, 180],
-          hourlyPriceVnd: 5000,
+          stationName: "Riverside Station",
+          connectors: [
+            {
+              connectorCode: "ST01-C01",
+              status: "AVAILABLE",
+              allowedDurationsMinutes: [60, 120, 180],
+              hourlyPriceVnd: 5000,
+            },
+          ],
         }),
       });
       return;
@@ -82,15 +89,22 @@ async function mockAmbiguousLocalApi(
   await page.context().route("http://localhost:4000/**", async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
-    if (method === "GET" && url.pathname === "/public/connectors/ST01-C01") {
+    if (
+      method === "GET" &&
+      url.pathname === "/public/stations/scan/ciphertext-token"
+    ) {
       await route.fulfill({
         contentType: "application/json",
         body: JSON.stringify({
-          stationCode: "ST01",
-          connectorCode: "ST01-C01",
-          status: "AVAILABLE",
-          allowedDurationsMinutes: [60, 120, 180],
-          hourlyPriceVnd: 5000,
+          stationName: "Riverside Station",
+          connectors: [
+            {
+              connectorCode: "ST01-C01",
+              status: "AVAILABLE",
+              allowedDurationsMinutes: [60, 120, 180],
+              hourlyPriceVnd: 5000,
+            },
+          ],
         }),
       });
       return;
@@ -197,7 +211,7 @@ test("selects a duration, opens local PayOS checkout, and shows payment waiting"
   page,
 }, testInfo) => {
   const api = await mockLocalApi(page);
-  await page.goto("/scan/ST01-C01");
+  await page.goto("/scan/station/ciphertext-token");
 
   await page.getByRole("button", { name: "2 hours" }).click();
   await page.getByRole("button", { name: "Create payment link" }).click();
@@ -280,7 +294,7 @@ test("recovers an ambiguous payment link with its stored order capability", asyn
   page,
 }, testInfo) => {
   const api = await mockAmbiguousLocalApi(page);
-  await page.goto("/scan/ST01-C01");
+  await page.goto("/scan/station/ciphertext-token");
 
   await page.getByRole("button", { name: "Create payment link" }).click();
 

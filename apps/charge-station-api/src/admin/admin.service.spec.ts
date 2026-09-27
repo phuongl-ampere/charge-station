@@ -20,6 +20,39 @@ import type { CoreIotClient } from "../iot/core-iot.client.js";
 import type { StationQrService } from "../stations/station-qr.service.js";
 
 describe("AdminService", () => {
+  it("links an unassigned station to one unique device", async () => {
+    const station = {
+      id: "station-1",
+      code: "ST01",
+      name: "Riverside",
+      deviceId: null,
+    } as Station;
+    const stationRepository = {
+      findOneBy: vi
+        .fn()
+        .mockResolvedValueOnce(station)
+        .mockResolvedValueOnce(null),
+      save: vi.fn().mockImplementation(async (value) => value),
+    };
+    const service = new AdminService(
+      {
+        transaction: vi.fn(async (callback) =>
+          callback({ getRepository: () => stationRepository }),
+        ),
+      } as unknown as DataSource,
+      {} as StationQrService,
+      {} as CoreIotClient,
+    );
+
+    await expect(service.linkDevice("station-1", "core-device-1")).resolves.toMatchObject({
+      id: "station-1",
+      deviceId: "core-device-1",
+    });
+    expect(stationRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceId: "core-device-1" }),
+    );
+  });
+
   it("attaches Core telemetry to mapped station", async () => {
     const station = {
       id: "station-1",
@@ -317,6 +350,10 @@ describe("AdminService", () => {
       qrVersion: 2,
       scanUrl: "https://charge.example.test/scan/station/ciphertext",
     });
-    expect(issue).toHaveBeenCalledWith(station.id, 2);
+    expect(issue).toHaveBeenCalledWith(
+      station.id,
+      2,
+      expect.objectContaining({ getRepository: expect.any(Function) }),
+    );
   });
 });

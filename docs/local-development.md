@@ -72,7 +72,9 @@ telemetry. The web build uses the configured `CHARGE_STATION_API_ORIGIN`
 (default `http://localhost:4000`), because that URL is resolved by the browser,
 not by the container.
 
-Open `http://localhost:3100/scan/ST01-C01` to create a local order. With `PAYOS_MODE=mock`, checkout is an API-hosted local page and no external PayOS request is made.
+Open `http://localhost:3100/admin`, create or select a station, then open its
+opaque Station QR URL to create a local order. With `PAYOS_MODE=mock`,
+checkout is an API-hosted local page and no external PayOS request is made.
 
 Open `http://localhost:3100/admin` for station operations. Local Compose seeds
 an `ADMIN` user from `ADMIN_EMAIL` and `ADMIN_PASSWORD`; the Compose defaults
@@ -117,12 +119,13 @@ Sign in to `http://localhost:3100/admin`, open **Stations**, and select **Add
 station**. The form needs only a station code and optional device ID. The
 platform provisions its internal default charge point automatically so the
 existing payment/IoT model can start charging. The resulting modal renders a
-station QR and its encrypted scan URL. QR scans open
+station QR and its opaque scan URL. QR scans open
 `/scan/station/<opaque-token>`; the customer chooses an available connector
 without station or connector codes appearing in the URL.
 
 `STATION_QR_ENCRYPTION_KEY` is mandatory for issuing and resolving station QR
-tokens. It must be a unique 64-character hexadecimal key in each environment.
+tokens. It is a unique 64-character hexadecimal secret used to derive and
+verify short opaque token mappings in each environment.
 Use **Rotate QR** only when old printed QR codes must stop working: it changes
 the station QR version and all older tokens return `404`.
 

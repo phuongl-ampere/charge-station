@@ -7,6 +7,7 @@ import {
   Inject,
   Param,
   Post,
+  Put,
   Query,
   UseGuards,
 } from "@nestjs/common";
@@ -41,6 +42,15 @@ export class AdminController {
   @UseGuards(AdminOnlyGuard)
   createStation(@Body() input: CreateStationDto) {
     return this.adminService.createStation(input);
+  }
+
+  @Put("stations/:id/device")
+  @UseGuards(AdminOnlyGuard)
+  linkDevice(
+    @Param("id") id: string,
+    @Body() input: { deviceId: string },
+  ) {
+    return this.adminService.linkDevice(id, input.deviceId);
   }
 
   @Get("stations/:id/qr")

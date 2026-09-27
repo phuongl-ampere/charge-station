@@ -1,15 +1,13 @@
 import { Injectable } from "@nestjs/common";
-import {
-  createCipheriv,
-  createDecipheriv,
-  randomBytes,
-} from "node:crypto";
+import { InjectRepository } from "@nestjs/typeorm";
+import { createHash, createHmac } from "node:crypto";
+import type { EntityManager, Repository } from "typeorm";
 
-const ALGORITHM = "aes-256-gcm";
-const TOKEN_VERSION = 1;
-const INITIALIZATION_VECTOR_LENGTH = 12;
-const AUTH_TAG_LENGTH = 16;
-const AAD = Buffer.from("charge-station:station-qr:v1", "utf8");
+import { StationQrToken } from "../database/data-source.js";
+
+const TOKEN_BYTES = 24;
+const TOKEN_DOMAIN = "charge-station:station-qr:v2";
+const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32}$/;
 const STATION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -27,78 +25,67 @@ export interface StationQrPayload {
 
 @Injectable()
 export class StationQrService {
-  issue(stationId: string, qrVersion: number): {
-    token: string;
-    url: string;
-  } {
+  constructor(
+    @InjectRepository(StationQrToken)
+    private readonly tokenRepository: Repository<StationQrToken>,
+  ) {}
+
+  async issue(
+    stationId: string,
+    qrVersion: number,
+    manager?: EntityManager,
+  ): Promise<{ token: string; url: string }> {
     const key = readStationQrEncryptionKey();
     const payload = validatePayload({ stationId, qrVersion });
-    const initializationVector = randomBytes(INITIALIZATION_VECTOR_LENGTH);
-    const cipher = createCipheriv(ALGORITHM, key, initializationVector, {
-      authTagLength: AUTH_TAG_LENGTH,
-    });
-    cipher.setAAD(AAD);
-    const encrypted = Buffer.concat([
-      cipher.update(JSON.stringify(payload), "utf8"),
-      cipher.final(),
-    ]);
-    const token = Buffer.concat([
-      Buffer.from([TOKEN_VERSION]),
-      initializationVector,
-      cipher.getAuthTag(),
-      encrypted,
-    ]).toString("base64url");
+    const token = createHmac("sha256", key)
+      .update(TOKEN_DOMAIN)
+      .update("\0")
+      .update(payload.stationId)
+      .update("\0")
+      .update(String(payload.qrVersion))
+      .digest()
+      .subarray(0, TOKEN_BYTES)
+      .toString("base64url");
+
+    const tokenRepository =
+      manager?.getRepository(StationQrToken) ?? this.tokenRepository;
+    await tokenRepository.upsert(
+      {
+        stationId: payload.stationId,
+        qrVersion: payload.qrVersion,
+        tokenHash: tokenHash(token),
+      },
+      ["stationId"],
+    );
+
     const frontendUrl = new URL(
       process.env.FRONTEND_URL?.trim() || "http://localhost:3100",
     );
-
     return {
       token,
       url: new URL(`/scan/station/${token}`, frontendUrl.origin).toString(),
     };
   }
 
-  resolve(token: string): StationQrPayload {
-    try {
-      if (!/^[A-Za-z0-9_-]+$/.test(token)) {
-        throw new InvalidStationQrError();
-      }
-      const tokenBuffer = Buffer.from(token, "base64url");
-      const minimumLength =
-        1 + INITIALIZATION_VECTOR_LENGTH + AUTH_TAG_LENGTH + 1;
-      if (
-        tokenBuffer.length < minimumLength ||
-        tokenBuffer[0] !== TOKEN_VERSION
-      ) {
-        throw new InvalidStationQrError();
-      }
-      const initializationVector = tokenBuffer.subarray(
-        1,
-        1 + INITIALIZATION_VECTOR_LENGTH,
-      );
-      const tagStart = 1 + INITIALIZATION_VECTOR_LENGTH;
-      const authTag = tokenBuffer.subarray(tagStart, tagStart + AUTH_TAG_LENGTH);
-      const ciphertext = tokenBuffer.subarray(tagStart + AUTH_TAG_LENGTH);
-      const decipher = createDecipheriv(
-        ALGORITHM,
-        readStationQrEncryptionKey(),
-        initializationVector,
-        { authTagLength: AUTH_TAG_LENGTH },
-      );
-      decipher.setAAD(AAD);
-      decipher.setAuthTag(authTag);
-      const plaintext = Buffer.concat([
-        decipher.update(ciphertext),
-        decipher.final(),
-      ]).toString("utf8");
-      return validatePayload(JSON.parse(plaintext));
-    } catch (error) {
-      if (error instanceof InvalidStationQrError) {
-        throw error;
-      }
+  async resolve(token: string): Promise<StationQrPayload> {
+    if (
+      !TOKEN_PATTERN.test(token) ||
+      Buffer.from(token, "base64url").length !== TOKEN_BYTES
+    ) {
       throw new InvalidStationQrError();
     }
+    const record = await this.tokenRepository.findOneBy({
+      tokenHash: tokenHash(token),
+    });
+    if (!record) {
+      throw new InvalidStationQrError();
+    }
+    return validatePayload(record);
   }
+}
+
+function tokenHash(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }
 
 function readStationQrEncryptionKey(): Buffer {
@@ -122,10 +109,7 @@ function validatePayload(value: unknown): StationQrPayload {
   ) {
     throw new InvalidStationQrError();
   }
-  return {
-    stationId: value.stationId,
-    qrVersion: value.qrVersion,
-  };
+  return { stationId: value.stationId, qrVersion: value.qrVersion };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

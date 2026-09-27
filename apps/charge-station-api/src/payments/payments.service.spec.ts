@@ -21,6 +21,41 @@ import type { PayosWebhook } from "./payos.client.js";
 import { PaymentsService } from "./payments.service.js";
 
 describe("PaymentsService webhook processing", () => {
+  it("rejects a new order when the linked station device is held", async () => {
+    const connector = {
+      id: randomUUID(),
+      code: "ST01-C01",
+      status: "AVAILABLE",
+      station: { deviceHold: true },
+      pricingPlan: {
+        hourlyPriceVnd: 5000,
+        allowedDurationsMinutes: [60],
+      },
+    } as Connector;
+    const connectorRepository = {
+      findOne: vi.fn().mockResolvedValue(connector),
+      save: vi.fn(),
+    };
+    const manager = {
+      query: vi.fn().mockResolvedValue([{ id: connector.id }]),
+      getRepository: vi.fn((entity) => {
+        if (entity === Connector) return connectorRepository;
+        if (entity === Order) return {};
+        if (entity === PaymentTransaction) return {};
+        throw new Error("Unexpected repository");
+      }),
+    };
+    const service = new PaymentsService(
+      { transaction: vi.fn(async (callback) => callback(manager)) } as unknown as DataSource,
+      {} as PayosClient,
+    );
+
+    await expect(
+      service.createOrder({ connectorCode: connector.code, durationMinutes: 60 }),
+    ).rejects.toThrow("Station device is held");
+    expect(connectorRepository.save).not.toHaveBeenCalled();
+  });
+
   it("returns a signed realtime access token after persisting a new order", async () => {
     const connector = {
       id: randomUUID(),

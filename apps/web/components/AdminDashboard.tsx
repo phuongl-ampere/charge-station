@@ -31,6 +31,7 @@ import {
 import {
   adminApi,
   type AdminApi,
+  type AdminDevice,
   type AdminDeviceTimelineItem,
   type AdminOverview,
   type AdminPayment,
@@ -44,17 +45,25 @@ type AdminOperationsApi = Pick<
   | "getOverview"
   | "getStations"
   | "createStation"
+  | "linkStationDevice"
   | "getStationQr"
   | "rotateStationQr"
   | "getSessions"
   | "getPayments"
-  | "getDeviceTimeline"
+  | "getDevices"
+  | "getDevice"
+  | "setDeviceHold"
+  | "controlDeviceRelay"
   | "stopSession"
   | "retryStart"
 >;
 
 type DashboardTab =
-  "overview" | "stations" | "sessions" | "payments" | "devices";
+  | "overview"
+  | "stations"
+  | "sessions"
+  | "payments"
+  | "devices";
 
 type AdminDashboardProps = {
   accessToken: string;
@@ -84,13 +93,15 @@ export function AdminDashboard({
   const [stations, setStations] = useState<AdminStation[]>([]);
   const [sessions, setSessions] = useState<AdminSession[]>([]);
   const [payments, setPayments] = useState<AdminPayment[]>([]);
-  const [timeline, setTimeline] = useState<AdminDeviceTimelineItem[]>([]);
+  const [devices, setDevices] = useState<AdminDevice[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [commandSessionId, setCommandSessionId] = useState<string | null>(null);
   const [creatingStation, setCreatingStation] = useState(false);
   const [stationDialogOpen, setStationDialogOpen] = useState(false);
+  const [linkStation, setLinkStation] = useState<AdminStation | null>(null);
+  const [linkingDevice, setLinkingDevice] = useState(false);
   const [qrStation, setQrStation] = useState<AdminStation | null>(null);
   const [stationQr, setStationQr] = useState<AdminStationQr | null>(null);
   const [qrLoading, setQrLoading] = useState(false);
@@ -104,19 +115,19 @@ export function AdminDashboard({
           nextStations,
           nextSessions,
           nextPayments,
-          nextTimeline,
+          nextDevices,
         ] = await Promise.all([
           api.getOverview(accessToken),
           api.getStations(accessToken),
           api.getSessions(accessToken),
           api.getPayments(accessToken),
-          api.getDeviceTimeline(accessToken),
+          api.getDevices(accessToken),
         ]);
         setOverview(nextOverview);
         setStations(nextStations);
         setSessions(nextSessions);
         setPayments(nextPayments);
-        setTimeline(nextTimeline);
+        setDevices(nextDevices);
         setError(null);
       } catch (cause) {
         setError(
@@ -199,6 +210,21 @@ export function AdminDashboard({
       );
     } finally {
       setCreatingStation(false);
+    }
+  }
+
+  async function linkDevice(deviceId: string): Promise<void> {
+    if (!linkStation) return;
+    setLinkingDevice(true);
+    setError(null);
+    try {
+      await api.linkStationDevice(linkStation.id, deviceId, accessToken);
+      setLinkStation(null);
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The device could not be linked");
+    } finally {
+      setLinkingDevice(false);
     }
   }
 
@@ -315,6 +341,7 @@ export function AdminDashboard({
                 commandSessionId={commandSessionId}
                 onCommand={runSessionCommand}
                 onCreateStation={() => setStationDialogOpen(true)}
+                onLinkDevice={setLinkStation}
                 onShowStationQr={(station) => void showStationQr(station)}
                 stations={stations}
               />
@@ -330,7 +357,7 @@ export function AdminDashboard({
               <PaymentsPanel payments={payments} />
             ) : null}
             {activeTab === "devices" ? (
-              <DeviceTimelinePanel timeline={timeline} />
+              <DevicesPanel accessToken={accessToken} api={api} devices={devices} />
             ) : null}
           </>
         )}
@@ -340,6 +367,12 @@ export function AdminDashboard({
         onCreate={(input) => void createStation(input)}
         open={stationDialogOpen}
         submitting={creatingStation}
+      />
+      <LinkDeviceDialog
+        onClose={() => setLinkStation(null)}
+        onLink={(deviceId) => void linkDevice(deviceId)}
+        station={linkStation}
+        submitting={linkingDevice}
       />
       <StationQrDialog
         loading={qrLoading}
@@ -445,12 +478,14 @@ function StationsPanel({
   commandSessionId,
   onCommand,
   onCreateStation,
+  onLinkDevice,
   onShowStationQr,
 }: {
   stations: AdminStation[];
   commandSessionId: string | null;
   onCommand: (sessionId: string, command: "stop" | "retry") => Promise<void>;
   onCreateStation: () => void;
+  onLinkDevice: (station: AdminStation) => void;
   onShowStationQr: (station: AdminStation) => void;
 }) {
   return (
@@ -487,6 +522,13 @@ function StationsPanel({
               >
                 <QrCode size={15} aria-hidden="true" />
                 Station QR
+              </button>
+              <button
+                className="admin-station-qr-button"
+                onClick={() => onLinkDevice(station)}
+                type="button"
+              >
+                {station.deviceId ? "Change device" : "Link device"}
               </button>
             </div>
             <div className="admin-connector-list">
@@ -716,6 +758,68 @@ function CreateStationDialog({
   );
 }
 
+function LinkDeviceDialog({
+  station,
+  submitting,
+  onClose,
+  onLink,
+}: {
+  station: AdminStation | null;
+  submitting: boolean;
+  onClose: () => void;
+  onLink: (deviceId: string) => void;
+}) {
+  const [deviceId, setDeviceId] = useState("");
+  if (!station) return null;
+
+  function submit(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    onLink(deviceId);
+  }
+
+  return (
+    <div className="admin-modal-backdrop" role="presentation">
+      <section
+        aria-labelledby="link-device-heading"
+        aria-modal="true"
+        className="admin-modal"
+        role="dialog"
+      >
+        <div className="admin-modal-heading">
+          <div>
+            <p className="eyebrow">{station.code}</p>
+            <h2 id="link-device-heading">Link device</h2>
+          </div>
+          <button
+            aria-label="Close link device"
+            className="admin-modal-close"
+            disabled={submitting}
+            onClick={onClose}
+            type="button"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+        <form className="admin-station-form" onSubmit={submit}>
+          <label htmlFor="link-device-id">Core device ID</label>
+          <input
+            autoComplete="off"
+            id="link-device-id"
+            maxLength={120}
+            onChange={(event) => setDeviceId(event.target.value)}
+            required
+            value={deviceId}
+          />
+          <div className="admin-modal-actions">
+            <button className="admin-modal-cancel" disabled={submitting} onClick={onClose} type="button">Cancel</button>
+            <button className="admin-modal-submit" disabled={submitting} type="submit">{submitting ? "Linking" : "Link device"}</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 function StationQrDialog({
   station,
   qr,
@@ -924,6 +1028,128 @@ function PaymentsPanel({ payments }: { payments: AdminPayment[] }) {
         <EmptyState icon={CreditCard} message="No PayOS payments yet" />
       ) : null}
     </TableSection>
+  );
+}
+
+function DevicesPanel({
+  devices,
+  accessToken,
+  api,
+}: {
+  devices: AdminDevice[];
+  accessToken: string;
+  api: Pick<
+    AdminApi,
+    "getDevice" | "setDeviceHold" | "controlDeviceRelay"
+  >;
+}) {
+  const [selected, setSelected] = useState<AdminDevice | null>(null);
+  const [busyRelay, setBusyRelay] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function open(deviceId: string): Promise<void> {
+    try {
+      setError(null);
+      setSelected(await api.getDevice(deviceId, accessToken));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Device detail could not be loaded");
+    }
+  }
+
+  async function setHold(held: boolean): Promise<void> {
+    if (!selected) return;
+    try {
+      setError(null);
+      await api.setDeviceHold(selected.deviceId, held, accessToken);
+      setSelected({ ...selected, held });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Device hold could not be changed");
+    }
+  }
+
+  async function control(relayId: string, enabled: boolean): Promise<void> {
+    if (!selected) return;
+    try {
+      setBusyRelay(relayId);
+      setError(null);
+      await api.controlDeviceRelay(
+        selected.deviceId,
+        relayId,
+        enabled ? { enabled: true, durationSeconds: 15 * 60 } : { enabled: false },
+        accessToken,
+      );
+      setSelected(await api.getDevice(selected.deviceId, accessToken));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Relay command was not accepted");
+    } finally {
+      setBusyRelay(null);
+    }
+  }
+
+  return (
+    <div className="admin-panel-stack">
+      {error ? <p className="admin-error" role="alert">{error}</p> : null}
+      <TableSection eyebrow="Station devices" heading="Devices" count={`${devices.length} linked`}>
+        <table className="admin-table">
+          <thead>
+            <tr>
+              <th>Device / station</th>
+              <th>Status</th>
+              <th>Charging</th>
+              <th>Hold</th>
+              <th aria-label="Open" />
+            </tr>
+          </thead>
+          <tbody>
+            {devices.map((device) => (
+              <tr key={device.deviceId}>
+                <td>
+                  <strong>{device.deviceId}</strong>
+                  <small>{device.stationCode} · {device.stationName}</small>
+                </td>
+                <td><span className={`admin-status is-${device.status.toLowerCase()}`}>{device.status}</span></td>
+                <td>{device.activeSessionId ? `Charging session ${device.activeSessionId}` : "Not charging"}</td>
+                <td>{device.held ? "HELD" : "RELEASED"}</td>
+                <td><button className="admin-text-button" onClick={() => void open(device.deviceId)} type="button">Open {device.deviceId}</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!devices.length ? <EmptyState icon={ServerCog} message="No station devices are linked" /> : null}
+      </TableSection>
+      {selected ? (
+        <section className="admin-section" aria-labelledby="device-detail-heading">
+          <div className="admin-section-heading">
+            <div>
+              <p className="eyebrow">{selected.stationCode} · {selected.status}</p>
+              <h2 id="device-detail-heading">Device {selected.deviceId}</h2>
+              <small>{selected.activeSessionId ? `Charging session ${selected.activeSessionId}` : "No active charging session"}</small>
+            </div>
+            <button className="admin-command-button" onClick={() => void setHold(!selected.held)} type="button">
+              {selected.held ? "Release device" : "Hold device"}
+            </button>
+          </div>
+          <p>Configuration: four fixed relays; manual ON defaults to a 15 minute timer.</p>
+          <p>Telemetry: {selected.telemetry ? `${formatPower(selected.telemetry.totalPowerW)} total` : "unavailable"}</p>
+          <div className="admin-connector-list">
+            {selected.relayIds.map((relayId) => {
+              const relay = selected.telemetry?.relays?.[relayId];
+              const enabled = relay?.enabled === true;
+              return (
+                <div className="admin-connector-row" key={relayId}>
+                  <div className="admin-connector-title">
+                    <strong>{relayId}</strong>
+                    <small>{enabled ? "ON" : "OFF"} · {formatPower(relay?.powerW ?? null)}</small>
+                  </div>
+                  <button disabled={busyRelay === relayId || selected.held} onClick={() => void control(relayId, true)} type="button">Turn on {relayId}</button>
+                  <button disabled={busyRelay === relayId} onClick={() => void control(relayId, false)} type="button">Turn off {relayId}</button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+    </div>
   );
 }
 

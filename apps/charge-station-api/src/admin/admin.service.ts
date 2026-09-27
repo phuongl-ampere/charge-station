@@ -252,6 +252,23 @@ export class AdminService {
     });
   }
 
+  async linkDevice(stationId: string, inputDeviceId: string) {
+    const deviceId = normalizeDeviceId(inputDeviceId);
+    if (!deviceId) {
+      throw new BadRequestException("Device ID is required");
+    }
+    return this.dataSource.transaction(async (manager) => {
+      const stationRepository = manager.getRepository(Station);
+      const station = await this.requireStation(manager, stationId);
+      const assigned = await stationRepository.findOneBy({ deviceId });
+      if (assigned && assigned.id !== station.id) {
+        throw new ConflictException("Device is already linked to another station");
+      }
+      station.deviceId = deviceId;
+      return stationRepository.save(station);
+    });
+  }
+
   async getStationQr(stationId: string) {
     const station = await this.requireStation(this.dataSource.manager, stationId);
     return this.stationQrView(station);
@@ -262,7 +279,7 @@ export class AdminService {
       const station = await this.requireStation(manager, stationId);
       station.qrVersion += 1;
       const savedStation = await manager.getRepository(Station).save(station);
-      return this.stationQrView(savedStation);
+      return this.stationQrView(savedStation, manager);
     });
   }
 
@@ -376,8 +393,12 @@ export class AdminService {
     return station;
   }
 
-  private stationQrView(station: Station) {
-    const qr = this.stationQrService.issue(station.id, station.qrVersion);
+  private async stationQrView(station: Station, manager?: EntityManager) {
+    const qr = await this.stationQrService.issue(
+      station.id,
+      station.qrVersion,
+      manager,
+    );
     return {
       stationId: station.id,
       qrVersion: station.qrVersion,

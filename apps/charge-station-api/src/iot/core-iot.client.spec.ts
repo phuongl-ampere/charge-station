@@ -97,6 +97,28 @@ describe("CoreIotClient", () => {
                 current_a: 10.2,
                 power_w: 2350,
                 energy_kwh: 0.0174,
+                total_power_w: 4700,
+                total_energy_kwh: 0.0348,
+                relays: {
+                  "relay-1": {
+                    enabled: true,
+                    remaining_seconds: 3599,
+                    voltage_v: 230.4,
+                    current_a: 10.2,
+                    power_w: 2350,
+                    energy_kwh: 0.0174,
+                    source: "MANUAL",
+                  },
+                  "relay-2": {
+                    enabled: true,
+                    remaining_seconds: 60,
+                    voltage_v: 230.4,
+                    current_a: 10.2,
+                    power_w: 2350,
+                    energy_kwh: 0.0174,
+                    source: "MANUAL",
+                  },
+                },
               },
             },
           ],
@@ -114,6 +136,28 @@ describe("CoreIotClient", () => {
       currentA: 10.2,
       powerW: 2350,
       energyKwh: 0.0174,
+      totalPowerW: 4700,
+      totalEnergyKwh: 0.0348,
+      relays: {
+        "relay-1": {
+          enabled: true,
+          remainingSeconds: 3599,
+          voltageV: 230.4,
+          currentA: 10.2,
+          powerW: 2350,
+          energyKwh: 0.0174,
+          source: "MANUAL",
+        },
+        "relay-2": {
+          enabled: true,
+          remainingSeconds: 60,
+          voltageV: 230.4,
+          currentA: 10.2,
+          powerW: 2350,
+          energyKwh: 0.0174,
+          source: "MANUAL",
+        },
+      },
     });
   });
 });

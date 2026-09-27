@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createChargeApi } from "./api";
+import { createAdminApi, createChargeApi } from "./api";
 
 const localApiOrigin = "http://localhost:4000";
 
@@ -48,6 +48,62 @@ describe("retryStart", () => {
           authorization: "Bearer capability-token",
         },
       }),
+    );
+  });
+});
+
+describe("admin devices", () => {
+  it("lists devices and sends hold or relay control with the admin token", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => [] })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ deviceId: "device-1", held: true }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ relayId: "relay-2", enabled: true }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: "station-1", deviceId: "device-1" }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createAdminApi(localApiOrigin);
+
+    await expect(api.getDevices("admin-token")).resolves.toEqual([]);
+    await expect(api.setDeviceHold("device-1", true, "admin-token")).resolves.toEqual({
+      deviceId: "device-1",
+      held: true,
+    });
+    await api.controlDeviceRelay("device-1", "relay-2", {
+      enabled: true,
+      durationSeconds: 60,
+    }, "admin-token");
+    await expect(
+      api.linkStationDevice("station-1", "device-1", "admin-token"),
+    ).resolves.toMatchObject({ deviceId: "device-1" });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `${localApiOrigin}/admin/devices`,
+      { headers: { authorization: "Bearer admin-token" } },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `${localApiOrigin}/admin/devices/device-1/hold`,
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      `${localApiOrigin}/admin/devices/device-1/relays/relay-2`,
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      `${localApiOrigin}/admin/stations/station-1/device`,
+      expect.objectContaining({ method: "PUT" }),
     );
   });
 });

@@ -8,10 +8,17 @@ import { AdminAccessGuard } from "./admin-access.guard.js";
 import { AdminOnlyGuard } from "./admin-only.guard.js";
 import { AdminController } from "./admin.controller.js";
 import { AdminService } from "./admin.service.js";
+import { DevicesController } from "./devices.controller.js";
+import { DevicesService } from "./devices.service.js";
 
 @Module({
   imports: [AuthModule, ChargingModule, IotModule, StationsModule],
-  controllers: [AdminController],
-  providers: [AdminAccessGuard, AdminOnlyGuard, AdminService],
+  controllers: [AdminController, DevicesController],
+  providers: [
+    AdminAccessGuard,
+    AdminOnlyGuard,
+    AdminService,
+    DevicesService,
+  ],
 })
 export class AdminModule {}

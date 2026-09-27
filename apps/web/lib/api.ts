@@ -1,16 +1,10 @@
-export interface Connector {
-  stationCode: string;
-  connectorCode: string;
-  status: "AVAILABLE" | "OCCUPIED" | "OFFLINE";
-  allowedDurationsMinutes: number[];
-  hourlyPriceVnd: number;
-}
+export type ConnectorStatus = "AVAILABLE" | "OCCUPIED" | "OFFLINE";
 
 export interface StationScan {
   stationName: string;
   connectors: Array<{
     connectorCode: string;
-    status: Connector["status"];
+    status: ConnectorStatus;
     allowedDurationsMinutes: number[];
     hourlyPriceVnd: number;
   }>;
@@ -131,7 +125,7 @@ export interface AdminStation {
   connectors: Array<{
     id: string;
     code: string;
-    status: Connector["status"];
+    status: ConnectorStatus;
     hourlyPriceVnd: number | null;
     activeSession: AdminSession | null;
   }>;
@@ -165,6 +159,33 @@ export interface AdminDeviceTimelineItem {
   details: Record<string, unknown>;
 }
 
+export interface AdminDeviceRelay {
+  enabled: boolean | null;
+  remainingSeconds: number | null;
+  voltageV: number | null;
+  currentA: number | null;
+  powerW: number | null;
+  energyKwh: number | null;
+  source: string | null;
+}
+
+export interface AdminDevice {
+  deviceId: string;
+  stationId: string;
+  stationCode: string;
+  stationName: string;
+  status: "ONLINE" | "OFFLINE";
+  held: boolean;
+  activeSessionId: string | null;
+  relayIds: string[];
+  telemetry: {
+    eventAt: string;
+    totalPowerW: number | null;
+    totalEnergyKwh: number | null;
+    relays: Record<string, AdminDeviceRelay> | null;
+  } | null;
+}
+
 export interface AdminStationQr {
   stationId: string;
   qrVersion: number;
@@ -172,7 +193,6 @@ export interface AdminStationQr {
 }
 
 export interface ChargeApi {
-  getConnector(connectorCode: string): Promise<Connector>;
   getStationScan(token: string): Promise<StationScan>;
   createOrder(input: {
     connectorCode: string;
@@ -208,6 +228,11 @@ export interface AdminApi {
     },
     accessToken: string,
   ): Promise<AdminStation>;
+  linkStationDevice(
+    stationId: string,
+    deviceId: string,
+    accessToken: string,
+  ): Promise<AdminStation>;
   getStationQr(
     stationId: string,
     accessToken: string,
@@ -221,6 +246,19 @@ export interface AdminApi {
   getDeviceTimeline(
     accessToken: string,
   ): Promise<AdminDeviceTimelineItem[]>;
+  getDevices(accessToken: string): Promise<AdminDevice[]>;
+  getDevice(deviceId: string, accessToken: string): Promise<AdminDevice>;
+  setDeviceHold(
+    deviceId: string,
+    held: boolean,
+    accessToken: string,
+  ): Promise<{ deviceId: string; held: boolean }>;
+  controlDeviceRelay(
+    deviceId: string,
+    relayId: string,
+    input: { enabled: boolean; durationSeconds?: number },
+    accessToken: string,
+  ): Promise<{ relayId: string; enabled: boolean }>;
   stopSession(
     sessionId: string,
     accessToken: string,
@@ -312,11 +350,6 @@ async function request<T>(
 export function createChargeApi(origin = localApiOrigin): ChargeApi {
   const local = localOrigin(origin, localApiOrigin);
   return {
-    getConnector: (connectorCode) =>
-      request<Connector>(
-        local,
-        `/public/connectors/${encodeURIComponent(connectorCode)}`,
-      ),
     getStationScan: (token) =>
       request<StationScan>(
         local,
@@ -400,6 +433,16 @@ export function createAdminApi(origin = localApiOrigin): AdminApi {
         headers: adminHeaders(accessToken),
         body: JSON.stringify(input),
       }),
+    linkStationDevice: (stationId, deviceId, accessToken) =>
+      request<AdminStation>(
+        local,
+        `/admin/stations/${encodeURIComponent(stationId)}/device`,
+        {
+          method: "PUT",
+          headers: adminHeaders(accessToken),
+          body: JSON.stringify({ deviceId }),
+        },
+      ),
     getStationQr: (stationId, accessToken) =>
       request<AdminStationQr>(
         local,
@@ -429,6 +472,32 @@ export function createAdminApi(origin = localApiOrigin): AdminApi {
         "/admin/device-timeline?limit=100",
         {
           headers: adminHeaders(accessToken),
+        },
+      ),
+    getDevices: (accessToken) =>
+      request<AdminDevice[]>(local, "/admin/devices", {
+        headers: adminHeaders(accessToken),
+      }),
+    getDevice: (deviceId, accessToken) =>
+      request<AdminDevice>(
+        local,
+        `/admin/devices/${encodeURIComponent(deviceId)}`,
+        { headers: adminHeaders(accessToken) },
+      ),
+    setDeviceHold: (deviceId, held, accessToken) =>
+      request<{ deviceId: string; held: boolean }>(
+        local,
+        `/admin/devices/${encodeURIComponent(deviceId)}/${held ? "hold" : "release"}`,
+        { method: "POST", headers: adminHeaders(accessToken) },
+      ),
+    controlDeviceRelay: (deviceId, relayId, input, accessToken) =>
+      request<{ relayId: string; enabled: boolean }>(
+        local,
+        `/admin/devices/${encodeURIComponent(deviceId)}/relays/${encodeURIComponent(relayId)}`,
+        {
+          method: "POST",
+          headers: adminHeaders(accessToken),
+          body: JSON.stringify(input),
         },
       ),
     stopSession: (sessionId, accessToken) =>

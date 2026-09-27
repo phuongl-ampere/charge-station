@@ -21,6 +21,8 @@ import { AddPaymentReservationExpiry } from "./migrations/005-payment-reservatio
 import { AddPaymentCancellationState } from "./migrations/006-payment-cancellation-state.js";
 import { AddDeviceCommandDispatchClaim } from "./migrations/007-device-command-dispatch-claim.js";
 import { AddStationQrVersion } from "./migrations/008-station-qr-version.js";
+import { AddStationQrTokens } from "./migrations/010-station-qr-tokens.js";
+import { AddDeviceHoldAndRemoveRelaySchedule } from "./migrations/011-device-hold.js";
 
 export enum UserRole {
   CUSTOMER = "CUSTOMER",
@@ -116,6 +118,9 @@ export class Station {
   @Column({ name: "qr_version", type: "integer", default: 1 })
   qrVersion!: number;
 
+  @Column({ name: "device_hold", type: "boolean", default: false })
+  deviceHold!: boolean;
+
   @OneToMany(() => Connector, (connector) => connector.station)
   connectors!: Connector[];
 
@@ -124,6 +129,21 @@ export class Station {
 
   @UpdateDateColumn({ name: "updated_at", type: "timestamptz" })
   updatedAt!: Date;
+}
+
+@Entity("station_qr_tokens")
+export class StationQrToken {
+  @PrimaryColumn("uuid", { name: "station_id" })
+  stationId!: string;
+
+  @Column({ name: "qr_version", type: "integer" })
+  qrVersion!: number;
+
+  @Column({ name: "token_hash", type: "varchar", length: 64, unique: true })
+  tokenHash!: string;
+
+  @CreateDateColumn({ name: "created_at", type: "timestamptz" })
+  createdAt!: Date;
 }
 
 @Entity("pricing_plans")
@@ -436,6 +456,7 @@ export class DeviceEvent {
 export const entities = [
   User,
   Station,
+  StationQrToken,
   PricingPlan,
   Connector,
   Order,
@@ -454,6 +475,8 @@ export const migrations = [
   AddPaymentCancellationState,
   AddDeviceCommandDispatchClaim,
   AddStationQrVersion,
+  AddStationQrTokens,
+  AddDeviceHoldAndRemoveRelaySchedule,
 ];
 
 export const databaseOptions: DataSourceOptions = {

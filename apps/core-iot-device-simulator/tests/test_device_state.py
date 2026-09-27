@@ -5,6 +5,25 @@ from src.main import handle_rpc
 
 
 class ChargeDeviceStateTests(unittest.TestCase):
+    def test_each_relay_has_an_independent_timer_and_telemetry(self) -> None:
+        state = ChargeDeviceState(voltage_v=230.0, current_a=10.0)
+
+        state.set_relay(
+            relay_id="relay-2",
+            enabled=True,
+            duration_seconds=2,
+            session_id="session-2",
+            now=100.0,
+        )
+
+        sample = state.sample(now=101.0)
+
+        self.assertFalse(sample["relays"]["relay-1"]["enabled"])
+        self.assertTrue(sample["relays"]["relay-2"]["enabled"])
+        self.assertEqual(sample["relays"]["relay-2"]["remaining_seconds"], 1)
+        self.assertEqual(sample["relays"]["relay-2"]["power_w"], 2300.0)
+        self.assertEqual(sample["total_power_w"], 2300.0)
+
     def test_start_relay_owns_duration_and_accumulates_energy(self) -> None:
         state = ChargeDeviceState(voltage_v=230.0, current_a=10.0)
 
@@ -69,6 +88,27 @@ class ChargeDeviceStateTests(unittest.TestCase):
         self.assertTrue(response["ok"])
         self.assertTrue(response["result"]["enabled"])
         self.assertEqual(response["result"]["remainingSeconds"], 60)
+
+    def test_two_way_set_relay_accepts_the_fourth_relay(self) -> None:
+        response = handle_rpc(
+            {
+                "id": "command-4",
+                "method": "setRelay",
+                "mode": "two_way",
+                "params": {
+                    "relayId": "relay-4",
+                    "enabled": True,
+                    "durationSeconds": 60,
+                    "sessionId": "session-4",
+                },
+            },
+            ChargeDeviceState(),
+            now=100.0,
+        )
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["result"]["relayId"], "relay-4")
+        self.assertTrue(response["result"]["enabled"])
 
     def test_invalid_two_way_command_returns_not_ok(self) -> None:
         response = handle_rpc(

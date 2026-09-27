@@ -24,6 +24,19 @@ export interface CoreTelemetry {
   currentA: number | null;
   powerW: number | null;
   energyKwh: number | null;
+  totalPowerW: number | null;
+  totalEnergyKwh: number | null;
+  relays: Record<string, CoreRelayTelemetry> | null;
+}
+
+export interface CoreRelayTelemetry {
+  enabled: boolean | null;
+  remainingSeconds: number | null;
+  voltageV: number | null;
+  currentA: number | null;
+  powerW: number | null;
+  energyKwh: number | null;
+  source: string | null;
 }
 
 export class CoreIotTransportError extends Error {}
@@ -112,6 +125,9 @@ export class CoreIotClient {
       currentA: numberValue(measurements, "current_a"),
       powerW: numberValue(measurements, "power_w"),
       energyKwh: numberValue(measurements, "energy_kwh"),
+      totalPowerW: numberValue(measurements, "total_power_w"),
+      totalEnergyKwh: numberValue(measurements, "total_energy_kwh"),
+      relays: relayTelemetry(measurements.relays),
     };
   }
 
@@ -269,6 +285,28 @@ function booleanValue(
   key: string,
 ): boolean | null {
   return typeof value[key] === "boolean" ? value[key] : null;
+}
+
+function relayTelemetry(value: unknown): Record<string, CoreRelayTelemetry> | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const relays: Record<string, CoreRelayTelemetry> = {};
+  for (const [relayId, reading] of Object.entries(value)) {
+    if (!isRecord(reading)) {
+      continue;
+    }
+    relays[relayId] = {
+      enabled: booleanValue(reading, "enabled"),
+      remainingSeconds: numberValue(reading, "remaining_seconds"),
+      voltageV: numberValue(reading, "voltage_v"),
+      currentA: numberValue(reading, "current_a"),
+      powerW: numberValue(reading, "power_w"),
+      energyKwh: numberValue(reading, "energy_kwh"),
+      source: stringValue(reading, "source"),
+    };
+  }
+  return relays;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

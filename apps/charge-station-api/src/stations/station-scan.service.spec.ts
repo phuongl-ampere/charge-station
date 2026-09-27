@@ -49,13 +49,13 @@ describe("StationScanService", () => {
     const connectorRepository = {
       find: vi.fn().mockResolvedValue([connector]),
     } as unknown as Repository<Connector>;
-    const qrService = new StationQrService();
+    const qrService = new StationQrService(createTokenRepository() as never);
     const service = new StationScanService(
       stationRepository,
       connectorRepository,
       qrService,
     );
-    const { token } = qrService.issue(station.id, station.qrVersion);
+    const { token } = await qrService.issue(station.id, station.qrVersion);
 
     await expect(service.getStationScan(token)).resolves.toEqual({
       stationName: "Riverside Station",
@@ -74,7 +74,7 @@ describe("StationScanService", () => {
   });
 
   it("rejects a QR token after the station version rotates", async () => {
-    const qrService = new StationQrService();
+    const qrService = new StationQrService(createTokenRepository() as never);
     const stationRepository = {
       findOneBy: vi.fn().mockResolvedValue({
         id: "3d20d6e7-5cbe-4fa2-af18-e8d1ab0ddbe6",
@@ -86,7 +86,7 @@ describe("StationScanService", () => {
       {} as Repository<Connector>,
       qrService,
     );
-    const { token } = qrService.issue(
+    const { token } = await qrService.issue(
       "3d20d6e7-5cbe-4fa2-af18-e8d1ab0ddbe6",
       1,
     );
@@ -96,3 +96,22 @@ describe("StationScanService", () => {
     );
   });
 });
+
+function createTokenRepository() {
+  const records = new Map<
+    string,
+    { stationId: string; qrVersion: number; tokenHash: string }
+  >();
+  return {
+    upsert: vi.fn(
+      async (record: {
+        stationId: string;
+        qrVersion: number;
+        tokenHash: string;
+      }) => records.set(record.tokenHash, record),
+    ),
+    findOneBy: vi.fn(async ({ tokenHash }: { tokenHash: string }) => {
+      return records.get(tokenHash) ?? null;
+    }),
+  };
+}

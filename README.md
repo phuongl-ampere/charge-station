@@ -20,7 +20,9 @@ environment; do not put them in this repository or a checked-in `.env` file. It
 uses its own Compose project with API port `4100` and web port `3110`, so it can
 run alongside a manually started local stack.
 
-Open `http://127.0.0.1:3110/scan/ST01-C01`. The local mock checkout is served by the API and requires no PayOS account or external request.
+Open `http://127.0.0.1:3110/admin`, create or select a station, then open its
+opaque Station QR URL. The local mock checkout is served by the API and
+requires no PayOS account or external request.
 
 The operations console is at `http://127.0.0.1:3110/admin`. Compose seeds the
 configured local admin account:
@@ -34,7 +36,7 @@ Change `ADMIN_EMAIL` and `ADMIN_PASSWORD` before exposing any environment
 outside local development.
 
 From **Stations**, an administrator can add a station and initial connector,
-then render its encrypted QR. Customer station URLs have the form
+then render its opaque QR. Customer station URLs have the form
 `/scan/station/<opaque-token>` and do not reveal station or connector codes.
 Set a unique `STATION_QR_ENCRYPTION_KEY` for every non-local environment.
 

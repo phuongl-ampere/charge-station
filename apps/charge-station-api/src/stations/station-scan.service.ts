@@ -19,7 +19,7 @@ export class StationScanService {
   async getStationScan(token: string) {
     let payload: { stationId: string; qrVersion: number };
     try {
-      payload = this.stationQrService.resolve(token);
+      payload = await this.stationQrService.resolve(token);
     } catch (error) {
       if (error instanceof InvalidStationQrError) {
         throw unavailableStationQr();

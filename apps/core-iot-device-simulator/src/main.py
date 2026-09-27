@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable
 
-from .device_state import ChargeDeviceState
+from .device_state import RELAY_IDS, ChargeDeviceState
 from .rpc_readiness import (
     RPC_REQUEST_TOPIC,
     RPC_REQUEST_QOS,
@@ -21,7 +21,6 @@ from .rpc_readiness import (
 RPC_RESPONSE_TOPIC = "v1/devices/me/rpc/response/{}"
 TELEMETRY_TOPIC = "v1/devices/me/telemetry"
 DEVICE_TOKEN_USERNAME = "iotd_device_token"
-RELAY_ID = "relay-1"
 RPC_RESPONSE_INITIAL_DELAY_SECONDS = 0.1
 RPC_RESPONSE_RETRY_DELAY_SECONDS = 1.0
 RPC_RESPONSE_MAX_PUBLISH_ATTEMPTS = 3
@@ -31,16 +30,19 @@ logger = logging.getLogger(__name__)
 def handle_rpc(
     request: Mapping[str, Any], state: ChargeDeviceState, *, now: float
 ) -> dict[str, object]:
-    if request.get("method") != "setRelay" or request.get("mode") != "two_way":
+    if request.get("mode") != "two_way":
         return {"ok": False, "error": "unsupported two-way command"}
 
     params = request.get("params")
     if not isinstance(params, Mapping):
         return {"ok": False, "error": "params must be an object"}
 
+    if request.get("method") != "setRelay":
+        return {"ok": False, "error": "unsupported two-way command"}
+
     relay_id = params.get("relayId")
     enabled = params.get("enabled")
-    if relay_id != RELAY_ID or not isinstance(enabled, bool):
+    if relay_id not in RELAY_IDS or not isinstance(enabled, bool):
         return {"ok": False, "error": "invalid relay command"}
 
     duration_seconds = params.get("durationSeconds")
@@ -50,6 +52,7 @@ def handle_rpc(
 
     try:
         sample = state.set_relay(
+            relay_id=relay_id,
             enabled=enabled,
             duration_seconds=duration_seconds if enabled else None,
             session_id=session_id,
@@ -62,8 +65,8 @@ def handle_rpc(
         "ok": True,
         "result": {
             "relayId": relay_id,
-            "enabled": sample["relay_state"],
-            "remainingSeconds": sample["remaining_seconds"],
+            "enabled": sample["relays"][relay_id]["enabled"],
+            "remainingSeconds": sample["relays"][relay_id]["remaining_seconds"],
         },
     }
 

@@ -311,14 +311,17 @@ export class PaymentsService {
         input.connectorCode,
       );
       const connector = connectorId
-        ? await connectorRepository.findOne({
+          ? await connectorRepository.findOne({
             where: { id: connectorId },
-            relations: { pricingPlan: true },
+            relations: { pricingPlan: true, station: true },
           })
         : null;
 
       if (!connector) {
         throw new NotFoundException("Connector not found");
+      }
+      if (connector.station?.deviceHold) {
+        throw new BadRequestException("Station device is held");
       }
       if (connector.status !== ConnectorStatus.AVAILABLE) {
         throw new BadRequestException("Connector is not available");
