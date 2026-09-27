@@ -47,6 +47,7 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 10_000;
 const DEFAULT_COMMAND_POLL_MS = 250;
 const MAX_COMMAND_TIMEOUT_MS = 60_000;
 const MAX_COMMAND_POLL_MS = 5_000;
+const MAX_TELEMETRY_PAGES = 20;
 
 export class CoreIotClient {
   async isHealthy(): Promise<boolean> {
@@ -91,24 +92,51 @@ export class CoreIotClient {
   async latestTelemetry(deviceId: string): Promise<CoreTelemetry | null> {
     const now = new Date();
     const from = new Date(now.valueOf() - 15 * 60_000);
-    const url = new URL(
-      `/api/v1/telemetry/${encodeURIComponent(deviceId)}`,
-      this.baseUrl(),
-    );
-    url.searchParams.set("from", from.toISOString());
-    url.searchParams.set("to", now.toISOString());
-    url.searchParams.set("limit", "100");
-    const page = await this.requestJson(
-      url.pathname + url.search,
-      { method: "GET" },
-      "read telemetry",
-    );
-    if (!isRecord(page) || !Array.isArray(page.items) || page.items.length === 0) {
-      return null;
+    let cursor: string | undefined;
+    let latest: Record<string, unknown> | null = null;
+    for (let pageNumber = 0; pageNumber < MAX_TELEMETRY_PAGES; pageNumber += 1) {
+      const url = new URL(
+        `/api/v1/telemetry/${encodeURIComponent(deviceId)}`,
+        this.baseUrl(),
+      );
+      url.searchParams.set("from", from.toISOString());
+      url.searchParams.set("to", now.toISOString());
+      url.searchParams.set("limit", "100");
+      if (cursor) {
+        url.searchParams.set("after", cursor);
+      }
+      const page = await this.requestJson(
+        url.pathname + url.search,
+        { method: "GET" },
+        "read telemetry",
+      );
+      if (!isRecord(page) || !Array.isArray(page.items)) {
+        break;
+      }
+      for (const candidate of page.items) {
+        if (
+          !isRecord(candidate) ||
+          typeof candidate.event_at !== "string" ||
+          Number.isNaN(Date.parse(candidate.event_at)) ||
+          !isRecord(candidate.measurements)
+        ) {
+          continue;
+        }
+        if (
+          !latest ||
+          Date.parse(candidate.event_at) > Date.parse(latest.event_at as string)
+        ) {
+          latest = candidate;
+        }
+      }
+      const nextCursor = page.next_cursor;
+      if (page.has_more !== true || typeof nextCursor !== "string" || !nextCursor) {
+        break;
+      }
+      cursor = nextCursor;
     }
-    const latest = page.items.at(-1);
     if (
-      !isRecord(latest) ||
+      !latest ||
       typeof latest.event_at !== "string" ||
       !isRecord(latest.measurements)
     ) {

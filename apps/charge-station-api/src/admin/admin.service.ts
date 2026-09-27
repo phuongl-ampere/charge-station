@@ -23,6 +23,7 @@ import {
   Station,
 } from "../database/data-source.js";
 import { CoreIotClient } from "../iot/core-iot.client.js";
+import { isCoreTelemetryStale } from "../iot/core-telemetry-monitor.service.js";
 import { StationQrService } from "../stations/station-qr.service.js";
 
 const activeSessionStatuses = new Set<ChargingSessionStatus>([
@@ -176,12 +177,7 @@ export class AdminService {
       const device = station.deviceId
         ? deviceById.get(station.deviceId)
         : null;
-      const status =
-        device?.availability === DeviceAvailability.IN_USE
-          ? "IN_USE" as const
-          : device?.availability === DeviceAvailability.AVAILABLE && telemetry
-            ? "AVAILABLE" as const
-            : "UNAVAILABLE" as const;
+      const status = stationStatus(device?.availability, telemetry);
 
       return {
         id: station.id,
@@ -289,7 +285,16 @@ export class AdminService {
       station.deviceId = deviceId;
       const savedStation = await stationRepository.save(station);
       const device = await this.ensureManagedDevice(deviceRepository, deviceId);
-      return { ...savedStation, status: device.availability };
+      let telemetry: Awaited<ReturnType<CoreIotClient["latestTelemetry"]>> = null;
+      try {
+        telemetry = await this.coreIotClient.latestTelemetry(deviceId);
+      } catch {
+        telemetry = null;
+      }
+      return {
+        ...savedStation,
+        status: stationStatus(device.availability, telemetry),
+      };
     });
   }
 
@@ -518,6 +523,23 @@ function normalizeCode(
     );
   }
   return code;
+}
+
+function stationStatus(
+  availability: DeviceAvailability | undefined,
+  telemetry: Awaited<ReturnType<CoreIotClient["latestTelemetry"]>>,
+): "AVAILABLE" | "IN_USE" | "UNAVAILABLE" {
+  if (availability === DeviceAvailability.IN_USE) {
+    return "IN_USE";
+  }
+  if (
+    availability === DeviceAvailability.AVAILABLE &&
+    telemetry &&
+    !isCoreTelemetryStale(telemetry, Date.now())
+  ) {
+    return "AVAILABLE";
+  }
+  return "UNAVAILABLE";
 }
 
 function normalizeDeviceId(value: string | null | undefined): string | null {

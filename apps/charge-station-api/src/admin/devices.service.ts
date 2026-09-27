@@ -20,6 +20,7 @@ import {
   CoreIotClient,
   CoreIotTransportError,
 } from "../iot/core-iot.client.js";
+import { isCoreTelemetryStale } from "../iot/core-telemetry-monitor.service.js";
 
 const relayIds = new Set(["relay-1", "relay-2", "relay-3", "relay-4"]);
 const DEFAULT_MANUAL_DURATION_SECONDS = 15 * 60;
@@ -83,7 +84,10 @@ export class DevicesService {
             stationId: station?.id ?? null,
             stationCode: station?.code ?? null,
             stationName: station?.name ?? null,
-            status: telemetry ? "ONLINE" : "OFFLINE",
+            status:
+              telemetry && !isCoreTelemetryStale(telemetry, Date.now())
+                ? "ONLINE"
+                : "OFFLINE",
             availability: managedDevice.availability,
             activeSessionId: station
               ? activeSessionByStationId.get(station.id)?.id ?? null

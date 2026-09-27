@@ -46,7 +46,7 @@ describe("DevicesService", () => {
     } as unknown as DataSource;
     const core = {
       latestTelemetry: vi.fn().mockResolvedValue({
-        eventAt: "2026-09-27T00:00:00.000Z",
+        eventAt: new Date().toISOString(),
         relayState: false,
         sessionId: null,
         remainingSeconds: 0,

@@ -57,6 +57,7 @@ describe("AdminService", () => {
     await expect(service.linkDevice("station-1", "core-device-1")).resolves.toMatchObject({
       id: "station-1",
       deviceId: "core-device-1",
+      status: "UNAVAILABLE",
     });
     expect(stationRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({ deviceId: "core-device-1" }),
@@ -72,7 +73,7 @@ describe("AdminService", () => {
     } as Station;
     const core = {
       latestTelemetry: vi.fn().mockResolvedValue({
-        eventAt: "2026-09-25T01:00:02.000Z",
+        eventAt: new Date().toISOString(),
         relayState: true,
         voltageV: 230.4,
         currentA: 10.2,
@@ -112,6 +113,43 @@ describe("AdminService", () => {
         }),
       ]),
     );
+  });
+
+  it("marks a station unavailable when its available device telemetry is stale", async () => {
+    const station = {
+      id: "station-1",
+      code: "ST01",
+      name: "Demo Station",
+      deviceId: "core-device",
+    } as Station;
+    const admin = new AdminService(
+      {
+        getRepository: (entity: unknown) => {
+          if (entity === ManagedDevice) {
+            return {
+              find: vi.fn().mockResolvedValue([{
+                deviceId: "core-device",
+                availability: DeviceAvailability.AVAILABLE,
+              }]),
+            };
+          }
+          if (entity === Station) return { find: vi.fn().mockResolvedValue([station]) };
+          if (entity === Connector) return { find: vi.fn().mockResolvedValue([]) };
+          if (entity === ChargingSession) return { find: vi.fn().mockResolvedValue([]) };
+          throw new Error("Unexpected repository");
+        },
+      } as unknown as DataSource,
+      {} as StationQrService,
+      {
+        latestTelemetry: vi.fn().mockResolvedValue({
+          eventAt: new Date(Date.now() - 90_001).toISOString(),
+        }),
+      } as unknown as CoreIotClient,
+    );
+
+    await expect(admin.getStations()).resolves.toEqual([
+      expect.objectContaining({ status: "UNAVAILABLE" }),
+    ]);
   });
 
   it("summarizes live connectors, today's paid revenue, and operational alerts", async () => {

@@ -64,6 +64,42 @@ describe("PaymentsService webhook processing", () => {
     expect(connectorRepository.save).not.toHaveBeenCalled();
   });
 
+  it("rejects a new order when the linked device telemetry is stale", async () => {
+    const connector = {
+      id: randomUUID(),
+      code: "ST01-C01",
+      status: "AVAILABLE",
+      station: { deviceId: "core-device-1" },
+      pricingPlan: { hourlyPriceVnd: 5000, allowedDurationsMinutes: [60] },
+    } as Connector;
+    const manager = {
+      query: vi
+        .fn()
+        .mockResolvedValueOnce([{ id: connector.id }])
+        .mockResolvedValueOnce([{ availability: "AVAILABLE" }]),
+      getRepository: vi.fn((entity) => {
+        if (entity === Connector) return { findOne: vi.fn().mockResolvedValue(connector) };
+        if (entity === Order || entity === PaymentTransaction) return {};
+        throw new Error("Unexpected repository");
+      }),
+    };
+    const service = new PaymentsService(
+      { transaction: vi.fn(async (callback) => callback(manager)) } as unknown as DataSource,
+      {} as PayosClient,
+      undefined,
+      undefined,
+      {
+        latestTelemetry: vi.fn().mockResolvedValue({
+          eventAt: new Date(Date.now() - 90_001).toISOString(),
+        }),
+      } as never,
+    );
+
+    await expect(
+      service.createOrder({ connectorCode: connector.code, durationMinutes: 60 }),
+    ).rejects.toThrow("Station device is unavailable");
+  });
+
   it("returns a signed realtime access token after persisting a new order", async () => {
     const connector = {
       id: randomUUID(),

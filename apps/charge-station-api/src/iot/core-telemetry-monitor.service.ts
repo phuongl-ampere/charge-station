@@ -70,7 +70,7 @@ export class CoreTelemetryMonitor implements OnApplicationShutdown {
         continue;
       }
 
-      if (!sample || isStale(sample, Date.now())) {
+      if (!sample || isCoreTelemetryStale(sample, Date.now())) {
         await this.emitOfflineIfNeeded(start);
         continue;
       }
@@ -178,7 +178,7 @@ export class CoreTelemetryMonitor implements OnApplicationShutdown {
   }
 }
 
-function isStale(sample: CoreTelemetry, now: number): boolean {
+export function isCoreTelemetryStale(sample: CoreTelemetry, now: number): boolean {
   const eventAt = Date.parse(sample.eventAt);
   return Number.isNaN(eventAt) || eventAt <= now - telemetryStaleMs();
 }

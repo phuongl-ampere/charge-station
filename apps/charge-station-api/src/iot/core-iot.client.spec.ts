@@ -160,6 +160,45 @@ describe("CoreIotClient", () => {
       },
     });
   });
+
+  it("selects the newest valid telemetry event when Core returns newest-first pages", async () => {
+    process.env.IOT_CORE_PUBLIC_URL = "http://core.test:18090";
+    process.env.IOT_CORE_ACCESS_TOKEN = "delegated-token";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          items: [
+            {
+              event_at: "2026-09-25T01:00:01.000Z",
+              measurements: { voltage_v: 220, power_w: 2200 },
+            },
+          ],
+          has_more: true,
+          next_cursor: "next-page",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          items: [
+            {
+              event_at: "2026-09-25T01:00:02.000Z",
+              measurements: { voltage_v: 230.4, power_w: 2350 },
+            },
+          ],
+          has_more: false,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(new CoreIotClient().latestTelemetry("core-device")).resolves.toMatchObject({
+      eventAt: "2026-09-25T01:00:02.000Z",
+      voltageV: 230.4,
+      powerW: 2350,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("after=next-page");
+  });
 });
 
 function jsonResponse(status: number, payload: unknown): Response {

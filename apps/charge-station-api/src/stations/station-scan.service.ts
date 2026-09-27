@@ -3,7 +3,15 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { HOURLY_PRICE_VND } from "@charge-station/contracts";
 import type { Repository } from "typeorm";
 
-import { Connector, Station } from "../database/data-source.js";
+import {
+  Connector,
+  ConnectorStatus,
+  DeviceAvailability,
+  ManagedDevice,
+  Station,
+} from "../database/data-source.js";
+import { CoreIotClient } from "../iot/core-iot.client.js";
+import { isCoreTelemetryStale } from "../iot/core-telemetry-monitor.service.js";
 import { InvalidStationQrError, StationQrService } from "./station-qr.service.js";
 
 @Injectable()
@@ -13,7 +21,10 @@ export class StationScanService {
     private readonly stationRepository: Repository<Station>,
     @InjectRepository(Connector)
     private readonly connectorRepository: Repository<Connector>,
+    @InjectRepository(ManagedDevice)
+    private readonly deviceRepository: Repository<ManagedDevice>,
     private readonly stationQrService: StationQrService,
+    private readonly coreIotClient: CoreIotClient,
   ) {}
 
   async getStationScan(token: string) {
@@ -33,6 +44,22 @@ export class StationScanService {
       throw unavailableStationQr();
     }
 
+    const device = station.deviceId
+      ? await this.deviceRepository.findOneBy({ deviceId: station.deviceId })
+      : null;
+    let telemetry = null;
+    try {
+      telemetry = station.deviceId
+        ? await this.coreIotClient.latestTelemetry(station.deviceId)
+        : null;
+    } catch {
+      telemetry = null;
+    }
+    const deviceAvailable =
+      device?.availability === DeviceAvailability.AVAILABLE &&
+      telemetry !== null &&
+      !isCoreTelemetryStale(telemetry, Date.now());
+
     const connectors = await this.connectorRepository.find({
       where: { station: { id: station.id } },
       order: { code: "ASC" },
@@ -42,7 +69,7 @@ export class StationScanService {
       stationName: station.name,
       connectors: connectors.map((connector) => ({
         connectorCode: connector.code,
-        status: connector.status,
+        status: deviceAvailable ? connector.status : ConnectorStatus.OFFLINE,
         allowedDurationsMinutes:
           connector.pricingPlan?.allowedDurationsMinutes ?? [60, 120, 180],
         hourlyPriceVnd:

@@ -28,6 +28,8 @@ import {
 } from "../database/data-source.js";
 import type { PaymentLink } from "@charge-station/contracts";
 import { CommandDispatcherService } from "../iot/command-dispatcher.service.js";
+import { CoreIotClient } from "../iot/core-iot.client.js";
+import { isCoreTelemetryStale } from "../iot/core-telemetry-monitor.service.js";
 import { ChargeGateway } from "../realtime/charge.gateway.js";
 import {
   PayosClient,
@@ -100,6 +102,9 @@ export class PaymentsService {
     @Optional()
     @Inject(ChargeGateway)
     private readonly gateway?: ChargeGateway,
+    @Optional()
+    @Inject(CoreIotClient)
+    private readonly coreIotClient?: CoreIotClient,
   ) {}
 
   async createOrder(input: CreateOrderDto): Promise<CreateOrderResult> {
@@ -332,6 +337,17 @@ export class PaymentsService {
         }
         if (deviceAvailability !== DeviceAvailability.AVAILABLE) {
           throw new BadRequestException("Station device is unavailable");
+        }
+        if (this.coreIotClient) {
+          let telemetry = null;
+          try {
+            telemetry = await this.coreIotClient.latestTelemetry(deviceId);
+          } catch {
+            telemetry = null;
+          }
+          if (!telemetry || isCoreTelemetryStale(telemetry, Date.now())) {
+            throw new BadRequestException("Station device is unavailable");
+          }
         }
       }
       if (connector.status !== ConnectorStatus.AVAILABLE) {
