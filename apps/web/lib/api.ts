@@ -108,6 +108,7 @@ export interface AdminStation {
   code: string;
   name: string;
   deviceId: string | null;
+  status: "AVAILABLE" | "IN_USE" | "UNAVAILABLE";
   telemetry:
     | {
         status: "AVAILABLE";
@@ -171,11 +172,11 @@ export interface AdminDeviceRelay {
 
 export interface AdminDevice {
   deviceId: string;
-  stationId: string;
-  stationCode: string;
-  stationName: string;
+  stationId: string | null;
+  stationCode: string | null;
+  stationName: string | null;
   status: "ONLINE" | "OFFLINE";
-  inUse: boolean;
+  availability: "AVAILABLE" | "IN_USE";
   activeSessionId: string | null;
   relayIds: string[];
   telemetry: {

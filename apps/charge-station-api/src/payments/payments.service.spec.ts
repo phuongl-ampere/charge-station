@@ -26,7 +26,7 @@ describe("PaymentsService webhook processing", () => {
       id: randomUUID(),
       code: "ST01-C01",
       status: "AVAILABLE",
-      station: { deviceInUse: true },
+      station: { deviceId: "core-device-1" },
       pricingPlan: {
         hourlyPriceVnd: 5000,
         allowedDurationsMinutes: [60],
@@ -37,7 +37,10 @@ describe("PaymentsService webhook processing", () => {
       save: vi.fn(),
     };
     const manager = {
-      query: vi.fn().mockResolvedValue([{ id: connector.id }]),
+      query: vi
+        .fn()
+        .mockResolvedValueOnce([{ id: connector.id }])
+        .mockResolvedValueOnce([{ availability: "IN_USE" }]),
       getRepository: vi.fn((entity) => {
         if (entity === Connector) return connectorRepository;
         if (entity === Order) return {};
@@ -53,6 +56,11 @@ describe("PaymentsService webhook processing", () => {
     await expect(
       service.createOrder({ connectorCode: connector.code, durationMinutes: 60 }),
     ).rejects.toThrow("Station device is in use");
+    expect(manager.query).toHaveBeenNthCalledWith(
+      2,
+      "SELECT availability FROM managed_devices WHERE device_id = $1 FOR UPDATE",
+      [connector.station.deviceId],
+    );
     expect(connectorRepository.save).not.toHaveBeenCalled();
   });
 

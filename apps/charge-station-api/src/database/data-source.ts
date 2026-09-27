@@ -24,6 +24,7 @@ import { AddStationQrVersion } from "./migrations/008-station-qr-version.js";
 import { AddStationQrTokens } from "./migrations/010-station-qr-tokens.js";
 import { AddDeviceHoldAndRemoveRelaySchedule } from "./migrations/011-device-hold.js";
 import { RenameDeviceHoldToDeviceUsage } from "./migrations/012-device-usage.js";
+import { MoveUsageStateToManagedDevices } from "./migrations/013-managed-device-availability.js";
 
 export enum UserRole {
   CUSTOMER = "CUSTOMER",
@@ -81,6 +82,11 @@ export enum DeviceCommandStatus {
   FAILED = "FAILED",
 }
 
+export enum DeviceAvailability {
+  AVAILABLE = "AVAILABLE",
+  IN_USE = "IN_USE",
+}
+
 @Entity("users")
 export class User {
   @PrimaryColumn("uuid")
@@ -119,11 +125,23 @@ export class Station {
   @Column({ name: "qr_version", type: "integer", default: 1 })
   qrVersion!: number;
 
-  @Column({ name: "device_in_use", type: "boolean", default: false })
-  deviceInUse!: boolean;
-
   @OneToMany(() => Connector, (connector) => connector.station)
   connectors!: Connector[];
+
+  @CreateDateColumn({ name: "created_at", type: "timestamptz" })
+  createdAt!: Date;
+
+  @UpdateDateColumn({ name: "updated_at", type: "timestamptz" })
+  updatedAt!: Date;
+}
+
+@Entity("managed_devices")
+export class ManagedDevice {
+  @PrimaryColumn({ name: "device_id", type: "varchar" })
+  deviceId!: string;
+
+  @Column({ type: "varchar", default: DeviceAvailability.AVAILABLE })
+  availability!: DeviceAvailability;
 
   @CreateDateColumn({ name: "created_at", type: "timestamptz" })
   createdAt!: Date;
@@ -457,6 +475,7 @@ export class DeviceEvent {
 export const entities = [
   User,
   Station,
+  ManagedDevice,
   StationQrToken,
   PricingPlan,
   Connector,
@@ -479,6 +498,7 @@ export const migrations = [
   AddStationQrTokens,
   AddDeviceHoldAndRemoveRelaySchedule,
   RenameDeviceHoldToDeviceUsage,
+  MoveUsageStateToManagedDevices,
 ];
 
 export const databaseOptions: DataSourceOptions = {

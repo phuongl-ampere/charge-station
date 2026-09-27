@@ -9,7 +9,9 @@ import {
   Connector,
   ConnectorStatus,
   DeviceCommand,
+  DeviceAvailability,
   entities,
+  ManagedDevice,
   migrations,
   Order,
   OrderStatus,
@@ -62,6 +64,10 @@ describe("PayOS payment concurrency with local PostgreSQL", () => {
       name: "PostgreSQL Test Station",
       deviceId: "dev_ST01",
     });
+    await dataSource.getRepository(ManagedDevice).save({
+      deviceId: station.deviceId!,
+      availability: DeviceAvailability.AVAILABLE,
+    });
     const pricingPlan = await dataSource.getRepository(PricingPlan).save({
       id: randomUUID(),
       name: "PostgreSQL Test Pricing",
@@ -99,6 +105,13 @@ describe("PayOS payment concurrency with local PostgreSQL", () => {
     await dataSource.getRepository(Connector).save({
       id: randomUUID(),
       code: "ST01-C05",
+      status: ConnectorStatus.AVAILABLE,
+      station,
+      pricingPlan,
+    });
+    await dataSource.getRepository(Connector).save({
+      id: randomUUID(),
+      code: "ST01-C06",
       status: ConnectorStatus.AVAILABLE,
       station,
       pricingPlan,
@@ -277,6 +290,45 @@ describe("PayOS payment concurrency with local PostgreSQL", () => {
           .findOneByOrFail({ code: "ST01-C01" })
       ).status,
     ).toBe(ConnectorStatus.OCCUPIED);
+  });
+
+  it("serializes a reservation behind an in-use device availability update", async () => {
+    const runner = dataSource.createQueryRunner();
+    await runner.connect();
+    await runner.startTransaction();
+    let reservation: ReturnType<PaymentsService["createOrder"]> | undefined;
+    try {
+      await runner.query(
+        "SELECT device_id FROM managed_devices WHERE device_id = $1 FOR UPDATE",
+        ["dev_ST01"],
+      );
+      await runner.manager.getRepository(ManagedDevice).update(
+        { deviceId: "dev_ST01" },
+        { availability: DeviceAvailability.IN_USE },
+      );
+
+      reservation = paymentsService.createOrder({
+        connectorCode: "ST01-C06",
+        durationMinutes: 60,
+      });
+      const beforeAvailabilityCommit = await Promise.race([
+        reservation.then(() => "settled", () => "settled"),
+        new Promise<string>((resolve) => setTimeout(() => resolve("waiting"), 50)),
+      ]);
+      expect(beforeAvailabilityCommit).toBe("waiting");
+
+      await runner.commitTransaction();
+      await expect(reservation).rejects.toThrow("Station device is in use");
+    } finally {
+      if (runner.isTransactionActive) {
+        await runner.rollbackTransaction();
+      }
+      await runner.release();
+      await dataSource.getRepository(ManagedDevice).update(
+        { deviceId: "dev_ST01" },
+        { availability: DeviceAvailability.AVAILABLE },
+      );
+    }
   });
 
   it("expires one overdue reservation across concurrent PostgreSQL reaper passes", async () => {

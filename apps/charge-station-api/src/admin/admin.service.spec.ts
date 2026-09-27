@@ -6,6 +6,7 @@ import {
   ChargingSessionStatus,
   Connector,
   ConnectorStatus,
+  DeviceAvailability,
   DeviceCommand,
   DeviceEvent,
   DeviceCommandStatus,
@@ -13,6 +14,7 @@ import {
   PaymentTransaction,
   PaymentTransactionStatus,
   PricingPlan,
+  ManagedDevice,
   Station,
 } from "../database/data-source.js";
 import { AdminService } from "./admin.service.js";
@@ -34,10 +36,18 @@ describe("AdminService", () => {
         .mockResolvedValueOnce(null),
       save: vi.fn().mockImplementation(async (value) => value),
     };
+    const deviceRepository = {
+      findOneBy: vi.fn().mockResolvedValue(null),
+      create: vi.fn((input) => input),
+      save: vi.fn().mockImplementation(async (value) => value),
+    };
     const service = new AdminService(
       {
         transaction: vi.fn(async (callback) =>
-          callback({ getRepository: () => stationRepository }),
+          callback({
+            getRepository: (entity: unknown) =>
+              entity === ManagedDevice ? deviceRepository : stationRepository,
+          }),
         ),
       } as unknown as DataSource,
       {} as StationQrService,
@@ -71,9 +81,14 @@ describe("AdminService", () => {
         remainingSeconds: 3540,
       }),
     };
+    const managedDevice = {
+      deviceId: "core-device",
+      availability: DeviceAvailability.AVAILABLE,
+    } as ManagedDevice;
     const admin = new AdminService(
       {
         getRepository: (entity: unknown) => {
+          if (entity === ManagedDevice) return { find: vi.fn().mockResolvedValue([managedDevice]) };
           if (entity === Station) return { find: vi.fn().mockResolvedValue([station]) };
           if (entity === Connector) return { find: vi.fn().mockResolvedValue([]) };
           if (entity === ChargingSession) return { find: vi.fn().mockResolvedValue([]) };
@@ -88,6 +103,7 @@ describe("AdminService", () => {
       expect.arrayContaining([
         expect.objectContaining({
           deviceId: "core-device",
+          status: "AVAILABLE",
           telemetry: expect.objectContaining({
             status: "AVAILABLE",
             voltageV: 230.4,
@@ -272,11 +288,17 @@ describe("AdminService", () => {
         { id: "price-1", name: "MVP hourly pricing" },
       ]),
     };
+    const deviceRepository = {
+      findOneBy: vi.fn().mockResolvedValue(null),
+      create: vi.fn((input) => input),
+      save: vi.fn().mockImplementation(async (input) => input),
+    };
     const manager = {
       getRepository: (entity: unknown) => {
         if (entity === Station) return stationRepository;
         if (entity === Connector) return connectorRepository;
         if (entity === PricingPlan) return pricingRepository;
+        if (entity === ManagedDevice) return deviceRepository;
         throw new Error("Unexpected repository");
       },
     };

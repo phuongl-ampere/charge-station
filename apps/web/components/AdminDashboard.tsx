@@ -357,7 +357,20 @@ export function AdminDashboard({
               <PaymentsPanel payments={payments} />
             ) : null}
             {activeTab === "devices" ? (
-              <DevicesPanel accessToken={accessToken} api={api} devices={devices} />
+              <DevicesPanel
+                accessToken={accessToken}
+                api={api}
+                devices={devices}
+                onAvailabilityChange={(deviceId, availability) =>
+                  setDevices((current) =>
+                    current.map((device) =>
+                      device.deviceId === deviceId
+                        ? { ...device, availability }
+                        : device,
+                    ),
+                  )
+                }
+              />
             ) : null}
           </>
         )}
@@ -515,6 +528,9 @@ function StationsPanel({
             <div className="admin-station-meta">
               <strong>{station.code}</strong>
               <small>{station.deviceId ?? "No device mapping"}</small>
+              <span className={`admin-status is-${station.status.toLowerCase()}`}>
+                {station.status.replace("_", " ")}
+              </span>
               <button
                 className="admin-station-qr-button"
                 onClick={() => onShowStationQr(station)}
@@ -1035,9 +1051,14 @@ function DevicesPanel({
   devices,
   accessToken,
   api,
+  onAvailabilityChange,
 }: {
   devices: AdminDevice[];
   accessToken: string;
+  onAvailabilityChange: (
+    deviceId: string,
+    availability: AdminDevice["availability"],
+  ) => void;
   api: Pick<
     AdminApi,
     "getDevice" | "setDeviceUsage" | "controlDeviceRelay"
@@ -1061,7 +1082,9 @@ function DevicesPanel({
     try {
       setError(null);
       await api.setDeviceUsage(selected.deviceId, inUse, accessToken);
-      setSelected({ ...selected, inUse });
+      const availability = inUse ? "IN_USE" : "AVAILABLE";
+      setSelected({ ...selected, availability });
+      onAvailabilityChange(selected.deviceId, availability);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Device usage could not be changed");
     }
@@ -1105,13 +1128,13 @@ function DevicesPanel({
               <tr key={device.deviceId}>
                 <td>
                   <strong>{device.deviceId}</strong>
-                  <small>{device.stationCode} · {device.stationName}</small>
+                  <small>{device.stationCode ?? "No linked station"} · {device.stationName ?? "—"}</small>
                 </td>
                 <td><span className={`admin-status is-${device.status.toLowerCase()}`}>{device.status}</span></td>
                 <td>{device.activeSessionId ? `Charging session ${device.activeSessionId}` : "Not charging"}</td>
                 <td>
-                  <span className={`admin-status is-${device.inUse ? "in-use" : "available"}`}>
-                    {device.inUse ? "In use" : "Available"}
+                  <span className={`admin-status is-${device.availability.toLowerCase()}`}>
+                    {formatDeviceAvailability(device.availability)}
                   </span>
                 </td>
                 <td><button className="admin-text-button" onClick={() => void open(device.deviceId)} type="button">Open {device.deviceId}</button></td>
@@ -1129,11 +1152,11 @@ function DevicesPanel({
               <h2 id="device-detail-heading">Device {selected.deviceId}</h2>
               <small>{selected.activeSessionId ? `Charging session ${selected.activeSessionId}` : "No active charging session"}</small>
             </div>
-            <button className="admin-command-button" onClick={() => void setUsage(!selected.inUse)} type="button">
-              {selected.inUse ? "Release device" : "Mark device in use"}
+            <button className="admin-command-button" onClick={() => void setUsage(selected.availability !== "IN_USE")} type="button">
+              {selected.availability === "IN_USE" ? "Release device" : "Mark device in use"}
             </button>
           </div>
-          <p>Usage: {selected.inUse ? "In use" : "Available"}</p>
+          <p>Usage: {formatDeviceAvailability(selected.availability)}</p>
           <p>Telemetry: {selected.telemetry ? `${formatPower(selected.telemetry.totalPowerW)} total` : "unavailable"}</p>
           <details className="admin-relay-demo">
             <summary>Relay demo</summary>
@@ -1359,6 +1382,10 @@ function formatPower(value: number | null): string {
 
 function formatEnergy(value: number | null): string {
   return value === null ? "No reading" : `${value.toFixed(3)} kWh`;
+}
+
+function formatDeviceAvailability(value: AdminDevice["availability"]): string {
+  return value === "IN_USE" ? "In use" : "Available";
 }
 
 function formatDuration(seconds: number): string {

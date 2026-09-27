@@ -8,6 +8,8 @@ import {
   appDataSource,
   Connector,
   ConnectorStatus,
+  DeviceAvailability,
+  ManagedDevice,
   PricingPlan,
   Station,
   User,
@@ -24,6 +26,7 @@ export async function seedDatabase(dataSource = appDataSource): Promise<void> {
     await dataSource.runMigrations();
 
     const stationRepository = dataSource.getRepository(Station);
+    const deviceRepository = dataSource.getRepository(ManagedDevice);
     const pricingRepository = dataSource.getRepository(PricingPlan);
     const connectorRepository = dataSource.getRepository(Connector);
     const userRepository = dataSource.getRepository(User);
@@ -43,6 +46,14 @@ export async function seedDatabase(dataSource = appDataSource): Promise<void> {
     if (coreDeviceId && station.deviceId !== coreDeviceId) {
       station.deviceId = coreDeviceId;
       station = await stationRepository.save(station);
+    }
+    if (station.deviceId && !(await deviceRepository.findOneBy({ deviceId: station.deviceId }))) {
+      await deviceRepository.save(
+        deviceRepository.create({
+          deviceId: station.deviceId,
+          availability: DeviceAvailability.AVAILABLE,
+        }),
+      );
     }
 
     let pricingPlan = await pricingRepository.findOneBy({

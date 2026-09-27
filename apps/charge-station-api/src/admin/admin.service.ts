@@ -6,15 +6,17 @@ import {
 } from "@nestjs/common";
 import { InjectDataSource } from "@nestjs/typeorm";
 import { randomUUID } from "node:crypto";
-import { DataSource, EntityManager } from "typeorm";
+import { DataSource, EntityManager, type Repository } from "typeorm";
 
 import {
   ChargingSession,
   ChargingSessionStatus,
   Connector,
   ConnectorStatus,
+  DeviceAvailability,
   DeviceCommand,
   DeviceEvent,
+  ManagedDevice,
   PaymentTransaction,
   PaymentTransactionStatus,
   PricingPlan,
@@ -134,7 +136,8 @@ export class AdminService {
   }
 
   async getStations() {
-    const [stations, connectors, sessions] = await Promise.all([
+    const [managedDevices, stations, connectors, sessions] = await Promise.all([
+      this.dataSource.getRepository(ManagedDevice).find(),
       this.dataSource
         .getRepository(Station)
         .find({ order: { code: "ASC" } }),
@@ -146,6 +149,9 @@ export class AdminService {
         .find({ order: { updatedAt: "DESC" } }),
     ]);
     const currentSessionByConnector = new Map<string, ChargingSession>();
+    const deviceById = new Map(
+      managedDevices.map((device) => [device.deviceId, device]),
+    );
     for (const session of sessions) {
       if (
         activeSessionStatuses.has(session.status) &&
@@ -167,26 +173,36 @@ export class AdminService {
       const telemetryResult = telemetryResults[index];
       const telemetry =
         telemetryResult?.status === "fulfilled" ? telemetryResult.value : null;
+      const device = station.deviceId
+        ? deviceById.get(station.deviceId)
+        : null;
+      const status =
+        device?.availability === DeviceAvailability.IN_USE
+          ? "IN_USE" as const
+          : device?.availability === DeviceAvailability.AVAILABLE && telemetry
+            ? "AVAILABLE" as const
+            : "UNAVAILABLE" as const;
 
       return {
-      id: station.id,
-      code: station.code,
-      name: station.name,
-      deviceId: station.deviceId,
-      telemetry: telemetry
-        ? { status: "AVAILABLE" as const, ...telemetry }
-        : { status: "UNAVAILABLE" as const },
-      connectors: connectors
-        .filter((connector) => connector.station.id === station.id)
-        .map((connector) => ({
-          id: connector.id,
-          code: connector.code,
-          status: connector.status,
-          hourlyPriceVnd: connector.pricingPlan?.hourlyPriceVnd ?? null,
-          activeSession: currentSessionByConnector.has(connector.id)
-            ? this.toSessionView(currentSessionByConnector.get(connector.id)!)
-            : null,
-        })),
+        id: station.id,
+        code: station.code,
+        name: station.name,
+        deviceId: station.deviceId,
+        status,
+        telemetry: telemetry
+          ? { status: "AVAILABLE" as const, ...telemetry }
+          : { status: "UNAVAILABLE" as const },
+        connectors: connectors
+          .filter((connector) => connector.station.id === station.id)
+          .map((connector) => ({
+            id: connector.id,
+            code: connector.code,
+            status: connector.status,
+            hourlyPriceVnd: connector.pricingPlan?.hourlyPriceVnd ?? null,
+            activeSession: currentSessionByConnector.has(connector.id)
+              ? this.toSessionView(currentSessionByConnector.get(connector.id)!)
+              : null,
+          })),
       };
     });
   }
@@ -198,6 +214,7 @@ export class AdminService {
 
     return this.dataSource.transaction(async (manager) => {
       const stationRepository = manager.getRepository(Station);
+      const deviceRepository = manager.getRepository(ManagedDevice);
       const connectorRepository = manager.getRepository(Connector);
       const pricingRepository = manager.getRepository(PricingPlan);
       if (await stationRepository.findOneBy({ code })) {
@@ -222,6 +239,9 @@ export class AdminService {
           qrVersion: 1,
         }),
       );
+      if (deviceId) {
+        await this.ensureManagedDevice(deviceRepository, deviceId);
+      }
       const connector = await connectorRepository.save(
         connectorRepository.create({
           id: randomUUID(),
@@ -237,6 +257,7 @@ export class AdminService {
         code: station.code,
         name: station.name,
         deviceId: station.deviceId,
+        status: "UNAVAILABLE" as const,
         telemetry: { status: "UNAVAILABLE" as const },
         qrVersion: station.qrVersion,
         connectors: [
@@ -259,13 +280,16 @@ export class AdminService {
     }
     return this.dataSource.transaction(async (manager) => {
       const stationRepository = manager.getRepository(Station);
+      const deviceRepository = manager.getRepository(ManagedDevice);
       const station = await this.requireStation(manager, stationId);
       const assigned = await stationRepository.findOneBy({ deviceId });
       if (assigned && assigned.id !== station.id) {
         throw new ConflictException("Device is already linked to another station");
       }
       station.deviceId = deviceId;
-      return stationRepository.save(station);
+      const savedStation = await stationRepository.save(station);
+      const device = await this.ensureManagedDevice(deviceRepository, deviceId);
+      return { ...savedStation, status: device.availability };
     });
   }
 
@@ -391,6 +415,22 @@ export class AdminService {
       throw new NotFoundException("Station not found");
     }
     return station;
+  }
+
+  private async ensureManagedDevice(
+    repository: Repository<ManagedDevice>,
+    deviceId: string,
+  ): Promise<ManagedDevice> {
+    const existing = await repository.findOneBy({ deviceId });
+    if (existing) {
+      return existing;
+    }
+    return repository.save(
+      repository.create({
+        deviceId,
+        availability: DeviceAvailability.AVAILABLE,
+      }),
+    );
   }
 
   private async stationQrView(station: Station, manager?: EntityManager) {

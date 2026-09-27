@@ -2,17 +2,20 @@
 
 ## Goal
 
-Make device usage an explicit business state: an operator marks a device as in
-use when it is occupied by a charging customer, and releases it when it can
-accept a new customer. Relay controls remain a separate, compact technical demo.
+Make device availability an explicit business state: an operator marks a device
+in use when it is occupied by a charging customer, and releases it when it can
+accept a new customer. Station status is derived from its linked device. Relay
+controls remain a separate, compact technical demo.
 
 ## Scope
 
 - Replace the `hold` terminology in the Charge Station API, contract, web API,
   and admin UI with `in use` / `release` terminology.
-- Keep one persisted station-level flag because a station has at most one linked
-  device. Rename the model and database column to `device_in_use`.
-- An in-use device rejects a new payment reservation. Existing payments,
+- Persist availability under the local device resource, never under a station.
+- A station is **Available** only when its linked device is available and has
+  current Core telemetry. An in-use or unavailable device makes its station
+  unavailable for a new customer.
+- An in-use linked device rejects a new payment reservation. Existing payments,
   charging sessions, telemetry, and relay commands continue unchanged.
 - The Devices table shows a **Usage** state: **In use** or **Available**.
 - Device detail shows one usage action: **Mark in use** or **Release device**.
@@ -22,24 +25,27 @@ accept a new customer. Relay controls remain a separate, compact technical demo.
 
 ## API and Data Design
 
-`Station.deviceInUse` is a non-null boolean with default `false`. Migration 012
-renames `stations.device_hold` to `device_in_use` and preserves every existing
-boolean value.
+`ManagedDevice` is keyed by the Core device ID and persists
+`availability: AVAILABLE | IN_USE`. Migration 012 preserves the prior boolean
+while migration 013 copies it into `managed_devices` and removes the temporary
+station column. A linked station derives `AVAILABLE`, `IN_USE`, or
+`UNAVAILABLE` from the managed device and live Core telemetry.
 
-The admin device representation exposes `inUse: boolean`. It provides:
+The admin device representation exposes `availability`. It provides:
 
 - `POST /admin/devices/:deviceId/occupy` to set `inUse` to `true`.
 - `POST /admin/devices/:deviceId/release` to set `inUse` to `false`.
 
-No `/hold` endpoint or `held` response property remains. Creating an order for
-an in-use linked station fails with `Station device is in use`. Relay commands
-do not inspect `deviceInUse`.
+No `/hold` endpoint or `held` response property remains. Payment reservation
+locks the managed-device row before reading availability, so it serializes with
+occupy/release. Relay commands do not inspect availability.
 
 ## UI Design
 
-The Devices tab is operational first: device online state, charging session,
-and usage state remain visible in the list. Device detail begins with a usage
-summary and action; it separately states the current charging session.
+The Stations tab shows derived station status. The Devices tab independently
+shows Core online state, charging session, and persisted availability. Device
+detail begins with a usage summary and action; it separately states the current
+charging session.
 
 Relay controls are visually subordinate in a native `<details>` disclosure
 closed by default. Its summary is **Relay demo** and its compact rows preserve
@@ -57,8 +63,9 @@ command keeps the existing 15-minute default timer when no duration is passed.
 
 ## Verification
 
-- API service tests prove occupy/release persistence, payment-reservation
-  rejection while in use, and relay ON remains allowed while in use.
+- API service and PostgreSQL concurrency tests prove occupy/release persistence,
+  station derivation, serialized payment reservation rejection while in use,
+  and relay ON remains allowed while in use.
 - Controller and web API tests prove the new endpoint paths and response
   property.
 - Dashboard tests prove usage labels/actions and the collapsed relay-demo

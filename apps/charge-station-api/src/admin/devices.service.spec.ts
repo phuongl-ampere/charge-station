@@ -5,6 +5,8 @@ import { ServiceUnavailableException } from "@nestjs/common";
 import {
   ChargingSession,
   ChargingSessionStatus,
+  DeviceAvailability,
+  ManagedDevice,
   Station,
 } from "../database/data-source.js";
 import {
@@ -20,8 +22,11 @@ describe("DevicesService", () => {
       code: "ST01",
       name: "Riverside",
       deviceId: "core-device-1",
-      deviceInUse: false,
     } as Station;
+    const managedDevice = {
+      deviceId: "core-device-1",
+      availability: DeviceAvailability.AVAILABLE,
+    } as ManagedDevice;
     const activeSession = {
       id: "session-1",
       status: ChargingSessionStatus.CHARGING,
@@ -29,6 +34,9 @@ describe("DevicesService", () => {
     } as ChargingSession;
     const dataSource = {
       getRepository: (entity: unknown) => {
+        if (entity === ManagedDevice) {
+          return { find: vi.fn().mockResolvedValue([managedDevice]) };
+        }
         if (entity === Station) return { find: vi.fn().mockResolvedValue([station]) };
         if (entity === ChargingSession) {
           return { find: vi.fn().mockResolvedValue([activeSession]) };
@@ -72,7 +80,7 @@ describe("DevicesService", () => {
         deviceId: "core-device-1",
         stationCode: "ST01",
         status: "ONLINE",
-        inUse: false,
+        availability: DeviceAvailability.AVAILABLE,
         activeSessionId: "session-1",
         telemetry: expect.objectContaining({ totalPowerW: 2350 }),
       }),
@@ -80,21 +88,22 @@ describe("DevicesService", () => {
   });
 
   it("marks a device in use while allowing an operator to enable a relay demo", async () => {
-    const station = {
-      id: "station-1",
-      code: "ST01",
-      name: "Riverside",
+    const managedDevice = {
       deviceId: "core-device-1",
-      deviceInUse: false,
-    } as Station;
-    const stationRepository = {
-      findOneBy: vi.fn().mockResolvedValue(station),
+      availability: DeviceAvailability.AVAILABLE,
+    } as ManagedDevice;
+    const deviceRepository = {
+      findOne: vi.fn().mockResolvedValue(managedDevice),
+      findOneBy: vi.fn().mockResolvedValue(managedDevice),
       save: vi.fn().mockImplementation(async (value) => value),
     };
     const core = { setRelay: vi.fn() };
+    const manager = { getRepository: () => deviceRepository };
+    const transaction = vi.fn(async (callback) => callback(manager));
     const service = new DevicesService(
       {
-        getRepository: () => stationRepository,
+        transaction,
+        getRepository: () => deviceRepository,
       } as unknown as DataSource,
       core as unknown as CoreIotClient,
     );
@@ -102,6 +111,11 @@ describe("DevicesService", () => {
     await expect(service.setInUse("core-device-1", true)).resolves.toEqual({
       deviceId: "core-device-1",
       inUse: true,
+    });
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(deviceRepository.findOne).toHaveBeenCalledWith({
+      where: { deviceId: "core-device-1" },
+      lock: { mode: "pessimistic_write" },
     });
     await service.controlRelay("core-device-1", "relay-4", {
       enabled: true,
@@ -118,15 +132,14 @@ describe("DevicesService", () => {
   });
 
   it("returns service unavailable when Core cannot acknowledge a relay command", async () => {
-    const stationRepository = {
+    const deviceRepository = {
       findOneBy: vi.fn().mockResolvedValue({
-        id: "station-1",
         deviceId: "core-device-1",
-        deviceInUse: false,
-      } as Station),
+        availability: DeviceAvailability.AVAILABLE,
+      } as ManagedDevice),
     };
     const service = new DevicesService(
-      { getRepository: () => stationRepository } as unknown as DataSource,
+      { getRepository: () => deviceRepository } as unknown as DataSource,
       {
         setRelay: vi
           .fn()

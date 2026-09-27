@@ -8,9 +8,11 @@ import {
   ChargingSessionStatus,
   Connector,
   ConnectorStatus,
+  DeviceAvailability,
   DeviceCommand,
   DeviceCommandStatus,
   entities,
+  ManagedDevice,
   migrations,
   Order,
   OrderStatus,
@@ -62,6 +64,10 @@ describe("Charging reliability with local PostgreSQL", () => {
       code: "ST01",
       name: "Reliability Test Station",
       deviceId: "dev_ST01",
+    });
+    await dataSource.getRepository(ManagedDevice).save({
+      deviceId: station.deviceId!,
+      availability: DeviceAvailability.AVAILABLE,
     });
     pricingPlan = await dataSource.getRepository(PricingPlan).save({
       id: randomUUID(),

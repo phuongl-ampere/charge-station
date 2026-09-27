@@ -11,6 +11,8 @@ import { DataSource } from "typeorm";
 import {
   ChargingSession,
   ChargingSessionStatus,
+  DeviceAvailability,
+  ManagedDevice,
   Station,
 } from "../database/data-source.js";
 import type { CoreTelemetry } from "../iot/core-iot.client.js";
@@ -32,11 +34,11 @@ const activeStatuses = new Set<ChargingSessionStatus>([
 
 export type DeviceListItem = {
   deviceId: string;
-  stationId: string;
-  stationCode: string;
-  stationName: string;
+  stationId: string | null;
+  stationCode: string | null;
+  stationName: string | null;
   status: "ONLINE" | "OFFLINE";
-  inUse: boolean;
+  availability: DeviceAvailability;
   activeSessionId: string | null;
   telemetry: CoreTelemetry | null;
   relayIds: ["relay-1", "relay-2", "relay-3", "relay-4"];
@@ -50,10 +52,20 @@ export class DevicesService {
   ) {}
 
   async list(): Promise<DeviceListItem[]> {
-    const [stations, sessions] = await Promise.all([
+    const [managedDevices, stations, sessions] = await Promise.all([
+      this.dataSource
+        .getRepository(ManagedDevice)
+        .find({ order: { deviceId: "ASC" } }),
       this.dataSource.getRepository(Station).find({ order: { code: "ASC" } }),
       this.dataSource.getRepository(ChargingSession).find(),
     ]);
+    const stationByDeviceId = new Map(
+      stations
+        .filter((station): station is Station & { deviceId: string } =>
+          Boolean(station.deviceId),
+        )
+        .map((station) => [station.deviceId, station]),
+    );
     const activeSessionByStationId = new Map<string, ChargingSession>();
     for (const session of sessions) {
       const stationId = session.connector?.station?.id;
@@ -63,18 +75,19 @@ export class DevicesService {
     }
 
     return Promise.all(
-      stations
-        .filter((station) => station.deviceId)
-        .map(async (station) => {
-          const telemetry = await this.readTelemetry(station.deviceId!);
+      managedDevices.map(async (managedDevice) => {
+          const station = stationByDeviceId.get(managedDevice.deviceId);
+          const telemetry = await this.readTelemetry(managedDevice.deviceId);
           return {
-            deviceId: station.deviceId!,
-            stationId: station.id,
-            stationCode: station.code,
-            stationName: station.name,
+            deviceId: managedDevice.deviceId,
+            stationId: station?.id ?? null,
+            stationCode: station?.code ?? null,
+            stationName: station?.name ?? null,
             status: telemetry ? "ONLINE" : "OFFLINE",
-            inUse: station.deviceInUse,
-            activeSessionId: activeSessionByStationId.get(station.id)?.id ?? null,
+            availability: managedDevice.availability,
+            activeSessionId: station
+              ? activeSessionByStationId.get(station.id)?.id ?? null
+              : null,
             telemetry,
             relayIds: ["relay-1", "relay-2", "relay-3", "relay-4"],
           };
@@ -96,10 +109,20 @@ export class DevicesService {
     deviceId: string,
     inUse: boolean,
   ): Promise<{ deviceId: string; inUse: boolean }> {
-    const station = await this.requireStation(deviceId);
-    station.deviceInUse = inUse;
-    await this.dataSource.getRepository(Station).save(station);
-    return { deviceId, inUse };
+    return this.dataSource.transaction(async (manager) => {
+      const device = await manager.getRepository(ManagedDevice).findOne({
+        where: { deviceId },
+        lock: { mode: "pessimistic_write" },
+      });
+      if (!device) {
+        throw new NotFoundException("Device not found");
+      }
+      device.availability = inUse
+        ? DeviceAvailability.IN_USE
+        : DeviceAvailability.AVAILABLE;
+      await manager.getRepository(ManagedDevice).save(device);
+      return { deviceId, inUse };
+    });
   }
 
   async controlRelay(
@@ -110,7 +133,7 @@ export class DevicesService {
     if (!relayIds.has(relayId)) {
       throw new BadRequestException("Unknown relay");
     }
-    await this.requireStation(deviceId);
+    await this.requireDevice(deviceId);
     const durationSeconds = input.enabled
       ? input.durationSeconds ?? DEFAULT_MANUAL_DURATION_SECONDS
       : undefined;
@@ -136,14 +159,14 @@ export class DevicesService {
     }
   }
 
-  private async requireStation(deviceId: string): Promise<Station> {
-    const station = await this.dataSource
-      .getRepository(Station)
+  private async requireDevice(deviceId: string): Promise<ManagedDevice> {
+    const device = await this.dataSource
+      .getRepository(ManagedDevice)
       .findOneBy({ deviceId });
-    if (!station) {
+    if (!device) {
       throw new NotFoundException("Device not found");
     }
-    return station;
+    return device;
   }
 
   private async readTelemetry(deviceId: string): Promise<CoreTelemetry | null> {

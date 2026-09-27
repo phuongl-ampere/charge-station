@@ -1071,12 +1071,14 @@ input {
 }
 .admin-status.is-occupied,
 .admin-status.is-in-use,
+.admin-status.is-in_use,
 .admin-status.is-pending,
 .admin-status.is-starting,
 .admin-status.is-stopping {
   color: #9a7009;
 }
 .admin-status.is-offline,
+.admin-status.is-unavailable,
 .admin-status.is-device_offline,
 .admin-status.is-start_failed,
 .admin-status.is-failed {

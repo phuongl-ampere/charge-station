@@ -8,6 +8,14 @@
 
 **Tech Stack:** NestJS, TypeORM/PostgreSQL, Vitest, Next.js/React, Testing Library, CSS.
 
+> **Execution amendment (2026-09-27):** The approved station-status refinement
+> moves availability from `stations` to a `managed_devices` resource keyed by
+> Core device ID. Migration 013 copies the intermediate station value into that
+> resource, then drops it. Devices return independent Core connectivity and
+> availability; Stations return a derived status and are available only when
+> their linked device is available with live telemetry. Payment reservation and
+> occupy/release lock the same managed-device row.
+
 ## Global Constraints
 
 - `inUse` is an operator-controlled customer-usage state; it blocks new payment reservations only.

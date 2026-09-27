@@ -19,11 +19,17 @@ describe("DevicesController", () => {
       deviceId: "device-1",
       inUse: true,
     });
+    devices.setInUse.mockResolvedValueOnce({ deviceId: "device-1", inUse: false });
+    await expect(controller.release("device-1")).resolves.toEqual({
+      deviceId: "device-1",
+      inUse: false,
+    });
     await controller.controlRelay("device-1", "relay-1", {
       enabled: true,
       durationSeconds: 60,
     });
     expect(devices.setInUse).toHaveBeenCalledWith("device-1", true);
+    expect(devices.setInUse).toHaveBeenCalledWith("device-1", false);
     expect(devices.controlRelay).toHaveBeenCalledWith("device-1", "relay-1", {
       enabled: true,
       durationSeconds: 60,

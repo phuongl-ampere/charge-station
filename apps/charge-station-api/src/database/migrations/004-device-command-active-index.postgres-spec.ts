@@ -70,6 +70,9 @@ describe("device command active index migrations with local PostgreSQL", () => {
       try {
         await new InitialSchemaMigration().up(queryRunner);
         await new AddDeviceCommandRetryAndSessionState().up(queryRunner);
+        await queryRunner.query(
+          "ALTER TABLE stations ADD COLUMN qr_version integer NOT NULL DEFAULT 1",
+        );
         await queryRunner.query(`
           CREATE TABLE migrations (
             id SERIAL PRIMARY KEY,
