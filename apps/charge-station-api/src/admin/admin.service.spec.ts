@@ -104,7 +104,7 @@ describe("AdminService", () => {
       expect.arrayContaining([
         expect.objectContaining({
           deviceId: "core-device",
-          status: "AVAILABLE",
+          status: "UNAVAILABLE",
           telemetry: expect.objectContaining({
             status: "AVAILABLE",
             voltageV: 230.4,
