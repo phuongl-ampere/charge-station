@@ -118,7 +118,14 @@ export class PaymentsService {
       );
     }
 
-    const reservation = await this.reservePaymentLink(input);
+    const telemetry = await this.readStationDeviceTelemetry(input.connectorCode);
+    if (
+      telemetry !== undefined &&
+      (!telemetry || isCoreTelemetryStale(telemetry, Date.now()))
+    ) {
+      throw new BadRequestException("Station device is unavailable");
+    }
+    const reservation = await this.reservePaymentLink(input, telemetry);
     const paymentLink = await this.createPaymentLink(reservation);
     if (!paymentLink) {
       return this.withRealtimeAccessToken({
@@ -307,6 +314,7 @@ export class PaymentsService {
 
   private async reservePaymentLink(
     input: CreateOrderDto,
+    telemetry: Awaited<ReturnType<CoreIotClient["latestTelemetry"]>> | undefined,
   ): Promise<PaymentLinkReservation> {
     return this.dataSource.transaction(async (manager) => {
       const connectorRepository = manager.getRepository(Connector);
@@ -338,16 +346,11 @@ export class PaymentsService {
         if (deviceAvailability !== DeviceAvailability.AVAILABLE) {
           throw new BadRequestException("Station device is unavailable");
         }
-        if (this.coreIotClient) {
-          let telemetry = null;
-          try {
-            telemetry = await this.coreIotClient.latestTelemetry(deviceId);
-          } catch {
-            telemetry = null;
-          }
-          if (!telemetry || isCoreTelemetryStale(telemetry, Date.now())) {
-            throw new BadRequestException("Station device is unavailable");
-          }
+        if (
+          telemetry !== undefined &&
+          (!telemetry || isCoreTelemetryStale(telemetry, Date.now()))
+        ) {
+          throw new BadRequestException("Station device is unavailable");
         }
       }
       if (connector.status !== ConnectorStatus.AVAILABLE) {
@@ -1099,6 +1102,27 @@ export class PaymentsService {
     }
 
     this.commandDispatcher.dispatchWhenIotReady(commandId);
+  }
+
+  private async readStationDeviceTelemetry(
+    connectorCode: string,
+  ): Promise<Awaited<ReturnType<CoreIotClient["latestTelemetry"]>> | undefined> {
+    if (!this.coreIotClient) {
+      return undefined;
+    }
+    const connector = await this.dataSource.getRepository(Connector).findOne({
+      where: { code: connectorCode },
+      relations: { station: true },
+    });
+    const deviceId = connector?.station?.deviceId;
+    if (!deviceId) {
+      return undefined;
+    }
+    try {
+      return await this.coreIotClient.latestTelemetry(deviceId);
+    } catch {
+      return null;
+    }
   }
 
   private async findPaymentForMockCheckout(

@@ -48,8 +48,12 @@ describe("PaymentsService webhook processing", () => {
         throw new Error("Unexpected repository");
       }),
     };
+    const transaction = vi.fn(async (callback) => callback(manager));
     const service = new PaymentsService(
-      { transaction: vi.fn(async (callback) => callback(manager)) } as unknown as DataSource,
+      {
+        transaction,
+        getRepository: () => ({ findOne: vi.fn().mockResolvedValue(connector) }),
+      } as unknown as DataSource,
       {} as PayosClient,
     );
 
@@ -83,21 +87,28 @@ describe("PaymentsService webhook processing", () => {
         throw new Error("Unexpected repository");
       }),
     };
+    const transaction = vi.fn(async (callback) => callback(manager));
+    const core = {
+      latestTelemetry: vi.fn().mockResolvedValue({
+        eventAt: "2000-01-01T00:00:00.000Z",
+      }),
+    };
     const service = new PaymentsService(
-      { transaction: vi.fn(async (callback) => callback(manager)) } as unknown as DataSource,
+      {
+        transaction,
+        getRepository: () => ({ findOne: vi.fn().mockResolvedValue(connector) }),
+      } as unknown as DataSource,
       {} as PayosClient,
       undefined,
       undefined,
-      {
-        latestTelemetry: vi.fn().mockResolvedValue({
-          eventAt: new Date(Date.now() - 90_001).toISOString(),
-        }),
-      } as never,
+      core as never,
     );
 
     await expect(
       service.createOrder({ connectorCode: connector.code, durationMinutes: 60 }),
     ).rejects.toThrow("Station device is unavailable");
+    expect(core.latestTelemetry).toHaveBeenCalledWith("core-device-1");
+    expect(transaction).not.toHaveBeenCalled();
   });
 
   it("returns a signed realtime access token after persisting a new order", async () => {

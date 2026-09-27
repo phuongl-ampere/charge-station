@@ -175,7 +175,7 @@ describe("StationScanService", () => {
       qrService,
       {
         latestTelemetry: vi.fn().mockResolvedValue({
-          eventAt: new Date(Date.now() - 90_001).toISOString(),
+          eventAt: new Date(Date.now() - 15 * 60_000 - 1).toISOString(),
         }),
       } as never,
     );

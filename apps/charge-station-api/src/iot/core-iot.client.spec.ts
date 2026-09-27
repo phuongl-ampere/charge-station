@@ -85,10 +85,12 @@ describe("CoreIotClient", () => {
           items: [
             {
               event_at: "2026-09-25T01:00:01.000Z",
+              sequence: 1,
               measurements: { voltage_v: 220, power_w: 2200 },
             },
             {
-              event_at: "2026-09-25T01:00:02.000Z",
+              event_at: "2026-09-25T01:00:01.000Z",
+              sequence: 2,
               measurements: {
                 relay_state: true,
                 session_id: "session-1",
@@ -127,7 +129,7 @@ describe("CoreIotClient", () => {
     );
 
     await expect(new CoreIotClient().latestTelemetry("core-device")).resolves.toEqual({
-      eventAt: "2026-09-25T01:00:02.000Z",
+      eventAt: "2026-09-25T01:00:01.000Z",
       relayState: true,
       sessionId: "session-1",
       remainingSeconds: 3599,

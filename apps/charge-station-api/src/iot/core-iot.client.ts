@@ -122,9 +122,18 @@ export class CoreIotClient {
         ) {
           continue;
         }
+        const candidateEventAt = Date.parse(candidate.event_at);
+        const candidateSequence =
+          typeof candidate.sequence === "number" ? candidate.sequence : -1;
+        const latestEventAt = latest
+          ? Date.parse(latest.event_at as string)
+          : Number.NEGATIVE_INFINITY;
+        const latestSequence =
+          latest && typeof latest.sequence === "number" ? latest.sequence : -1;
         if (
           !latest ||
-          Date.parse(candidate.event_at) > Date.parse(latest.event_at as string)
+          candidateEventAt > latestEventAt ||
+          (candidateEventAt === latestEventAt && candidateSequence > latestSequence)
         ) {
           latest = candidate;
         }
