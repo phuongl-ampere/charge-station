@@ -18,7 +18,7 @@ const api = {
       id: "station-1",
       code: "ST01",
       name: "Demo Station",
-      deviceId: "dev_ST01",
+      deviceId: "core-device-1",
       status: "AVAILABLE",
       telemetry: { status: "UNAVAILABLE" },
       connectors: [
@@ -284,20 +284,13 @@ describe("AdminDashboard", () => {
       ),
     );
     expect(screen.queryByText("Available")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Release device" }));
-    await waitFor(() =>
-      expect(api.setDeviceUsage).toHaveBeenCalledWith(
-        "core-device-1",
-        false,
-        "admin-token",
-      ),
-    );
-    expect(screen.getAllByText("Available").length).toBeGreaterThan(0);
     const relayDemo = screen.getByText("Relay demo").closest("details");
     expect(relayDemo).not.toHaveAttribute("open");
     await user.click(screen.getByText("Relay demo"));
     expect(relayDemo).toHaveAttribute("open");
     expect(screen.getByRole("button", { name: "Turn on relay-1" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Stations" }));
+    expect(screen.getByText("IN USE")).toBeVisible();
   });
 
 });

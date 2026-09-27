@@ -362,13 +362,31 @@ export function AdminDashboard({
                 api={api}
                 devices={devices}
                 onAvailabilityChange={(deviceId, availability) =>
-                  setDevices((current) =>
-                    current.map((device) =>
-                      device.deviceId === deviceId
-                        ? { ...device, availability }
-                        : device,
-                    ),
-                  )
+                  {
+                    setDevices((current) =>
+                      current.map((device) =>
+                        device.deviceId === deviceId
+                          ? { ...device, availability }
+                          : device,
+                      ),
+                    );
+                    setStations((current) =>
+                      current.map((station) => {
+                        if (station.deviceId !== deviceId) {
+                          return station;
+                        }
+                        return {
+                          ...station,
+                          status:
+                            availability === "IN_USE"
+                              ? "IN_USE"
+                              : station.telemetry.status === "AVAILABLE"
+                                ? "AVAILABLE"
+                                : "UNAVAILABLE",
+                        };
+                      }),
+                    );
+                  }
                 }
               />
             ) : null}
