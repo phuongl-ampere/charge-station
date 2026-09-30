@@ -1,5 +1,9 @@
 # Local Development
 
+For architecture, server-derived Station/Device status rules and the full API
+inventory, read [architecture.md](architecture.md) first. This file is the
+operational runbook for starting and stopping local services.
+
 ## Prerequisites
 
 - Docker Desktop with Compose v2.

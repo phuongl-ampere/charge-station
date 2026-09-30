@@ -4,6 +4,9 @@ Local EV charging checkout with a mock PayOS payment flow and direct isolated
 Core IoT integration. The Core-connected simulator, not the browser or API
 timer, owns relay start and stop.
 
+Current architecture, status rules, API inventory, setup and known limits are
+documented in [docs/architecture.md](docs/architecture.md).
+
 ## Run locally
 
 Start the isolated Core first, then use the safe harness described in [local
