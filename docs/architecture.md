@@ -1,7 +1,7 @@
 # Charge Station Architecture
 
 This is the current runtime architecture. It supersedes older design notes when
-they describe manual Device hold/release or assume Core telemetry is returned
+they describe manual Device hold/release or assume IoT Nano telemetry is returned
 in one page.
 
 ## System boundary
@@ -17,15 +17,15 @@ Admin browser / customer QR browser
              │                         │
              │ OAuth REST              │ stations, connectors, orders,
              ▼                         │ payments, sessions, events,
- Isolated Core public API (18090)       │ managed device registry
+ IoT Nano public API (18081)            │ managed device registry
              │ MQTT                     │
              ▼                         │
- Charge-device simulator (18893) ───────┘
+ Charge-device simulator (18883) ───────┘
 ```
 
-Core is external to Docker Compose. The API uses Core's public REST API with a
-delegated user OAuth bearer token. The simulator is the only Charge Station
-component that uses the Core MQTT device token.
+IoT Nano is external to Docker Compose. The API uses its public REST API with
+a Tenant Account PAT scoped to `tenant-cs`. The simulator is the only Charge
+Station component that uses the Nano MQTT device token.
 
 ## Ownership
 
@@ -33,8 +33,8 @@ component that uses the Core MQTT device token.
 | --- | --- |
 | Web | Browser UI, admin authentication state, QR checkout UI. It never receives Core secrets. |
 | API | Order/payment orchestration, local persistence, server-derived Station/Device status, Core REST calls, authorization. |
-| PostgreSQL | Business records and a local registry of Core device IDs. |
-| Core | MQTT transport, telemetry history, command lifecycle and device authorization. |
+| PostgreSQL | Business records and a local registry of IoT Nano device IDs. |
+| IoT Nano | MQTT transport, telemetry history, command lifecycle and device authorization. |
 | Simulator | Four relay demo states, electrical telemetry and manual relay timers. |
 
 ## Device and Station status
@@ -44,18 +44,18 @@ Device status is read-only. It is never toggled by an admin action.
 | Device status | Server condition |
 | --- | --- |
 | `IN_USE` | A linked charging session is `STARTING`, `CHARGING`, or `STOPPING`. |
-| `AVAILABLE` | The device has fresh Core telemetry and has no in-use charging session. |
-| `OFFLINE` | No usable fresh Core telemetry is available. |
+| `AVAILABLE` | The device has fresh IoT Nano telemetry and has no in-use charging session. |
+| `OFFLINE` | No usable fresh IoT Nano telemetry is available. |
 
 Station status is server-derived and is independent of relay demo buttons.
 
 | Station status | Server condition |
 | --- | --- |
 | `IN_USE` | The linked device has an in-use charging session. |
-| `AVAILABLE` | Core telemetry is fresh and the station has at least one `AVAILABLE` connector. |
+| `AVAILABLE` | IoT Nano telemetry is fresh and the station has at least one `AVAILABLE` connector. |
 | `UNAVAILABLE` | There is no usable device telemetry, no available connector, or no linked device. |
 
-The customer QR scan endpoint returns connector `OFFLINE` when live device
+The customer QR scan endpoint returns connector `OFFLINE` when live IoT Nano
 telemetry is unavailable. This prevents the checkout UI from presenting an
 unsafe connector as selectable. Order creation performs the same Core
 telemetry freshness preflight before opening a payment reservation.
@@ -68,11 +68,11 @@ Device occupy/release endpoints.
 
 ## Telemetry
 
-The API requests Core telemetry for a fixed trailing 15-minute window. Core
+The API requests IoT Nano telemetry for a fixed trailing 15-minute window. Nano
 returns pages ordered by its opaque `next_cursor`; continuation uses the `after`
 query parameter. The client follows at most 20 pages and selects the record
 with the highest `(event_at, sequence)` pair. A telemetry sample is stale after
-`IOT_CORE_TELEMETRY_STALE_MS` (90 seconds by default, capped at 15 minutes).
+`IOT_NANO_TELEMETRY_STALE_MS` (90 seconds by default, capped at 15 minutes).
 
 The telemetry monitor emits charging-session events only for fresh telemetry
 whose `session_id` matches the persisted session. Relay timer expiry remains a
@@ -88,7 +88,7 @@ simulator event; the browser and API do not own relay timing.
    database transaction.
 4. A verified payment webhook creates a charging session and a persisted Core
    start command.
-5. Core publishes the command to MQTT; the simulator responds with the actual
+5. IoT Nano publishes the command to MQTT; the simulator responds with the actual
    relay state; API records the resulting session event.
 6. Fresh matching telemetry drives heartbeats and final timer-expiry stop
    events. Connector release happens only through the persisted lifecycle.
@@ -105,7 +105,7 @@ tokens are never returned by these APIs.
 | `POST` | `/auth/login` | Admin JWT login. |
 | `GET` | `/admin/overview` | Operations summary. |
 | `GET`, `POST` | `/admin/stations` | List or create a Station. |
-| `PUT` | `/admin/stations/:id/device` | Link or change a Core device ID. |
+| `PUT` | `/admin/stations/:id/device` | Link or change an IoT Nano device ID. |
 | `GET` | `/admin/stations/:id/qr` | Render the opaque station QR URL. |
 | `POST` | `/admin/stations/:id/qr/rotate` | Invalidate older QR tokens. |
 | `GET` | `/admin/devices` | Read-only Device status, telemetry and linked Station. |
@@ -128,24 +128,26 @@ There are intentionally no Device `occupy`, `release`, or `hold` endpoints.
 
 ## Local installation and start
 
-Prerequisites: Docker Desktop/Compose v2, Node 22, pnpm 9, and an isolated
-Core listening on public `127.0.0.1:18090`, management `:18091`, MQTT `:18893`.
+Prerequisites: Docker Desktop/Compose v2, Node 22, pnpm 9, and IoT Nano
+listening on `127.0.0.1:18081` with MQTT `:18883`.
 
-1. Start and verify Core from `iot-core/` according to `iot-core/README.md`.
-2. Supply runtime-only Core credentials; never put them in Git or `.env`.
-3. Run the E2E harness:
+1. Start and verify IoT Nano.
+2. Supply runtime-only Nano credentials; never put them in Git or `.env`.
+3. Provision `tenant-cs` and start Compose:
 
 ```sh
-export IOT_CORE_ACCESS_TOKEN='<delegated user token>'
-export CORE_TENANT_PASSWORD='<tenant account password>'
-export CORE_USER_PASSWORD='<Core user password>'
-pnpm tsx scripts/core-iot-local-e2e.ts
+export IOT_NANO_SYSTEM_USERNAME='<system username>'
+export IOT_NANO_SYSTEM_PASSWORD='<system password>'
+export IOT_NANO_TENANT_PASSWORD='<tenant-cs password>'
+export IOT_NANO_CS_ADMIN_PASSWORD='<cs-admin password>'
+export IOT_NANO_CS_OPERATOR_PASSWORD='<cs-operator password>'
+pnpm seed:iot-nano
+docker compose --env-file .charge-station-iot-nano.env up -d --build --wait
 ```
 
-The harness provisions/reuses a Core device, keeps the device MQTT token in a
-private temporary directory, starts an isolated Compose project, and validates
-the real flow. See [local-development.md](local-development.md) for ports,
-environment values and the manual Compose procedure.
+The seed provisions/reuses a Nano device and writes its PAT/device token only
+to the ignored owner-only Compose env file. See
+[local-development.md](local-development.md) for ports and environment values.
 
 Stop only the Charge Station preview stack without deleting database data:
 
@@ -171,11 +173,11 @@ The PostgreSQL integration suite requires a running local PostgreSQL service.
 
 ## Known limits / incomplete work
 
-- Core OAuth access tokens expire. The local workflow currently refreshes the
-  delegated token manually; no production token-refresh service exists.
+- Tenant Account PATs are rotated by the local seed. Production deployment must
+  provision and rotate its own tenant-scoped credential.
 - Relay controls are a local technical demo. They are not a substitute for the
   charging payment/session lifecycle.
 - Core runtime state and credentials are local-only operational assets, not
   source-controlled application data.
-- Production PayOS configuration, external HTTPS callbacks and live Core
+- Production PayOS configuration, external HTTPS callbacks and live Nano
   credential issuance require environment-specific operational setup.

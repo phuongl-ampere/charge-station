@@ -11,7 +11,8 @@
     "build": "pnpm -r --if-present build",
     "test": "pnpm -r --if-present test",
     "lint": "pnpm -r --if-present lint",
-    "format": "prettier --check ."
+    "format": "prettier --check .",
+    "seed:iot-nano": "pnpm --filter @charge-station/api seed:iot-nano"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

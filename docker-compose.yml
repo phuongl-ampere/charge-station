@@ -29,7 +29,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      core-iot-device-simulator:
+      iot-nano-device-simulator:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://charge:charge@postgres:5432/charge_station
@@ -38,14 +38,14 @@ services:
       ADMIN_PASSWORD: local-admin-password-change-me
       STATION_QR_ENCRYPTION_KEY: 4d8eae9b3271c5f079cfb8b4f14ba3ca9d7e6a0b4c32f807c2d2ab5e983f1140
       FRONTEND_URL: ${CHARGE_STATION_WEB_ORIGIN:-http://localhost:3100}
-      IOT_CORE_PUBLIC_URL: http://host.docker.internal:18090
-      IOT_CORE_ACCESS_TOKEN: ${IOT_CORE_ACCESS_TOKEN:?Set IOT_CORE_ACCESS_TOKEN in the shell that starts Compose}
-      IOT_CORE_DEVICE_ID: ${IOT_CORE_DEVICE_ID:?Set IOT_CORE_DEVICE_ID in the shell that starts Compose}
-      IOT_CORE_RELAY_ID: ${IOT_CORE_RELAY_ID:-relay-1}
-      IOT_CORE_COMMAND_TIMEOUT_MS: ${IOT_CORE_COMMAND_TIMEOUT_MS:-10000}
-      IOT_CORE_COMMAND_POLL_MS: ${IOT_CORE_COMMAND_POLL_MS:-250}
-      IOT_CORE_TELEMETRY_POLL_MS: ${IOT_CORE_TELEMETRY_POLL_MS:-2000}
-      IOT_CORE_TELEMETRY_STALE_MS: ${IOT_CORE_TELEMETRY_STALE_MS:-15000}
+      IOT_NANO_API_URL: http://host.docker.internal:18081
+      IOT_NANO_PAT: ${IOT_NANO_PAT:?Set IOT_NANO_PAT in the shell that starts Compose}
+      IOT_NANO_DEVICE_ID: ${IOT_NANO_DEVICE_ID:?Set IOT_NANO_DEVICE_ID in the shell that starts Compose}
+      IOT_NANO_RELAY_ID: ${IOT_NANO_RELAY_ID:-relay-1}
+      IOT_NANO_COMMAND_TIMEOUT_MS: ${IOT_NANO_COMMAND_TIMEOUT_MS:-10000}
+      IOT_NANO_COMMAND_POLL_MS: ${IOT_NANO_COMMAND_POLL_MS:-250}
+      IOT_NANO_TELEMETRY_POLL_MS: ${IOT_NANO_TELEMETRY_POLL_MS:-2000}
+      IOT_NANO_TELEMETRY_STALE_MS: ${IOT_NANO_TELEMETRY_STALE_MS:-15000}
       PAYOS_MODE: mock
       PAYOS_CLIENT_ID: local-client-id
       PAYOS_API_KEY: local-api-key
@@ -72,15 +72,15 @@ services:
       retries: 20
       start_period: 10s
 
-  core-iot-device-simulator:
+  iot-nano-device-simulator:
     build:
       context: ./apps/core-iot-device-simulator
     environment:
-      IOT_CORE_MQTT_HOST: host.docker.internal
-      IOT_CORE_MQTT_PORT: "18893"
-      IOT_CORE_DEVICE_TOKEN: ${IOT_CORE_DEVICE_TOKEN:?Run the Core E2E harness or set IOT_CORE_DEVICE_TOKEN in the shell that starts Compose}
+      IOT_NANO_MQTT_HOST: host.docker.internal
+      IOT_NANO_MQTT_PORT: "18883"
+      IOT_NANO_DEVICE_TOKEN: ${IOT_NANO_DEVICE_TOKEN:?Run the IoT Nano E2E harness or set IOT_NANO_DEVICE_TOKEN in the shell that starts Compose}
       IOT_SIMULATOR_TELEMETRY_INTERVAL_SECONDS: ${IOT_SIMULATOR_TELEMETRY_INTERVAL_SECONDS:-1}
-      IOT_SIMULATOR_READINESS_FILE: /tmp/core-iot-device-simulator.ready
+      IOT_SIMULATOR_READINESS_FILE: /tmp/iot-nano-device-simulator.ready
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

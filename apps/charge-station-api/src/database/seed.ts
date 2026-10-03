@@ -42,7 +42,7 @@ export async function seedDatabase(dataSource = appDataSource): Promise<void> {
         }),
       );
     }
-    const coreDeviceId = process.env.IOT_CORE_DEVICE_ID?.trim();
+    const coreDeviceId = process.env.IOT_NANO_DEVICE_ID?.trim();
     if (coreDeviceId && station.deviceId !== coreDeviceId) {
       station.deviceId = coreDeviceId;
       station = await stationRepository.save(station);

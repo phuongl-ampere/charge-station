@@ -8,57 +8,45 @@ operational runbook for starting and stopping local services.
 
 - Docker Desktop with Compose v2.
 - Node.js 22 and pnpm 9 for host-side tests and builds.
-- An already-running isolated Core at public `http://127.0.0.1:18090`,
-  management `http://127.0.0.1:18091`, and MQTT `127.0.0.1:18893`.
+- An already-running IoT Nano platform at `http://127.0.0.1:18081` and MQTT
+  `127.0.0.1:18883`.
 
-Published Charge Station ports bind to `127.0.0.1`. Core is external to this
-Compose project: the API reaches it through `host.docker.internal:18090` and
-the simulator reaches MQTT through `host.docker.internal:18893`.
+Published Charge Station ports bind to `127.0.0.1`. IoT Nano is external to
+this Compose project: the API reaches it through `host.docker.internal:18081`
+and the simulator reaches MQTT through `host.docker.internal:18883`.
 
 ## Start the stack
 
-Supply Core credentials through the invoking shell or a private process
-environment; do not put them in this repository, a Compose file, a cookie jar,
-or a checked-in `.env` file. The safe real-flow command reuses `tenant1` and
-`user-a`; it reuses `IOT_CORE_DEVICE_ID` when that device exists, otherwise
-provisions and assigns a fresh isolated device. It obtains the device MQTT token
-by API, writes that token and the selected device ID only into a temporary
-directory with mode `0700`, starts Compose, then removes that directory.
+Supply the Nano system and local tenant passwords through the invoking shell;
+do not put them in this repository or a checked-in `.env` file. The seed
+creates or reuses the dedicated `tenant-cs` tenant, `cs-admin`, `cs-operator`,
+and its Charge Station device. It rotates the Tenant Account PAT and issues a
+device MQTT token, writing only those runtime secrets into the ignored
+owner-only `.charge-station-iot-nano.env` file.
 
 ```sh
-export IOT_CORE_ACCESS_TOKEN='<delegated user token>'
-export CORE_TENANT_PASSWORD='<tenant1 password>'
-export CORE_USER_PASSWORD='<user-a password>'
-pnpm tsx scripts/core-iot-local-e2e.ts
+export IOT_NANO_SYSTEM_USERNAME='<system username>'
+export IOT_NANO_SYSTEM_PASSWORD='<system password>'
+export IOT_NANO_TENANT_PASSWORD='<tenant-cs password>'
+export IOT_NANO_CS_ADMIN_PASSWORD='<cs-admin password>'
+export IOT_NANO_CS_OPERATOR_PASSWORD='<cs-operator password>'
+pnpm seed:iot-nano
+docker compose --env-file .charge-station-iot-nano.env up -d --build --wait
 ```
 
-`IOT_CORE_ACCESS_TOKEN` must be a delegated tenant-user token with
-`devices:read`, `telemetry:read`, `commands:read`, and `commands:write`.
-Core's public command API requires that user principal; a client-credentials
-token cannot control the station relay.
+The generated `IOT_NANO_PAT` has the same API authority as the Tenant Account
+and is scoped to `tenant-cs`; it cannot access devices in other tenants.
 
-The harness accepts only the two isolated `127.0.0.1` Core HTTP endpoints. It
-never prints credentials. It starts services with `docker compose up -d --build
---wait` and intentionally does not run `docker compose down -v`.
+For subsequent manual Compose starts, reuse the generated secret file:
 
-The harness uses the isolated Compose project `charge-station-core-iot-e2e`,
-API port `4100`, web port `3110`, and PostgreSQL port `5433` by default,
-leaving the manual Compose defaults (`4000`, `3100`, and `5432`) free. Set
-`CHARGE_STATION_API_HOST_PORT`, `CHARGE_STATION_WEB_HOST_PORT`,
-`CHARGE_STATION_POSTGRES_HOST_PORT`, and
-`CHARGE_STATION_COMPOSE_PROJECT_NAME` in the invoking environment to use
-different local values. `CHARGE_STATION_API_URL` may instead select a local
-`http://127.0.0.1:<port>` or `http://localhost:<port>` API origin; the harness
-uses that same origin for Compose and local checkout validation.
-
-For a manual Compose start, provide both `IOT_CORE_DEVICE_ID` and
-`IOT_CORE_DEVICE_TOKEN` from your approved local Core workflow. The token is a
-runtime secret and must not be copied into `.env.example` or source control.
+```sh
+docker compose --env-file .charge-station-iot-nano.env up -d --build --wait
+```
 
 The API waits for PostgreSQL, runs its TypeORM migrations and idempotent demo
 seed, then starts. The seed creates station `ST01`, connector `ST01-C01`, and
-the 5,000 VND/hour pricing plan. When `IOT_CORE_DEVICE_ID` is set, every seed
-run updates `ST01` to that Core device ID, including an existing local database.
+the 5,000 VND/hour pricing plan. When `IOT_NANO_DEVICE_ID` is set, every seed
+run updates `ST01` to that Nano device ID, including an existing local database.
 Pending persisted commands are scheduled asynchronously only after API health.
 
 | Service            | URL or network name                                      |
@@ -66,12 +54,12 @@ Pending persisted commands are scheduled asynchronously only after API health.
 | Web                | `http://localhost:3100`                                  |
 | Charge Station API | `http://localhost:4000`                                  |
 | API health         | `http://localhost:4000/health`                           |
-| Core public API    | `http://host.docker.internal:18090` from Compose         |
-| Core MQTT          | `host.docker.internal:18893` from the simulator          |
+| IoT Nano API       | `http://host.docker.internal:18081` from Compose         |
+| IoT Nano MQTT      | `host.docker.internal:18883` from the simulator          |
 | PostgreSQL         | `postgres://charge:charge@localhost:5432/charge_station` |
 
-The API sends two-way REST commands to Core and monitors Core telemetry. The
-`core-iot-device-simulator` sidecar handles Core MQTT relay RPC and publishes
+The API sends two-way REST commands to IoT Nano and monitors Nano telemetry. The
+`iot-nano-device-simulator` sidecar handles Nano MQTT relay RPC and publishes
 telemetry. The web build uses the configured `CHARGE_STATION_API_ORIGIN`
 (default `http://localhost:4000`), because that URL is resolved by the browser,
 not by the container.
@@ -108,13 +96,13 @@ PAYMENT_REAPER_INTERVAL_MS=60000
 ADMIN_EMAIL=admin@charge.local
 ADMIN_PASSWORD=local-admin-password-change-me
 STATION_QR_ENCRYPTION_KEY=<64-character-hex-key>
-IOT_CORE_PUBLIC_URL=http://127.0.0.1:18090
-IOT_CORE_ACCESS_TOKEN=<delegated-user-access-token>
-IOT_CORE_DEVICE_ID=<optional-isolated-core-device-id-for-the-harness>
-IOT_CORE_DEVICE_TOKEN=<isolated-core-device-token>
+IOT_NANO_API_URL=http://127.0.0.1:18081
+IOT_NANO_PAT=<tenant-cs-personal-access-token>
+IOT_NANO_DEVICE_ID=<tenant-cs-device-id>
+IOT_NANO_DEVICE_TOKEN=<tenant-cs-device-token>
 ```
 
-`IOT_CORE_ACCESS_TOKEN` and `IOT_CORE_DEVICE_TOKEN` are credentials. Keep them
+`IOT_NANO_PAT` and `IOT_NANO_DEVICE_TOKEN` are credentials. Keep them
 out of terminal history, logs, committed files, and persistent cookie jars.
 
 ## Station QR Management
@@ -133,7 +121,7 @@ verify short opaque token mappings in each environment.
 Use **Rotate QR** only when old printed QR codes must stop working: it changes
 the station QR version and all older tokens return `404`.
 
-After Core confirms a relay command, the API records the corresponding charging
+After IoT Nano confirms a relay command, the API records the corresponding charging
 state transition and the telemetry monitor updates live station measurements.
 Core remains the source of truth for relay state and timer expiry.
 
@@ -240,7 +228,8 @@ fragment, so the capability is not placed in a query string or referrer.
 ## Verification
 
 ```sh
-pnpm tsx scripts/core-iot-local-e2e.ts
+pnpm seed:iot-nano
+docker compose --env-file .charge-station-iot-nano.env up -d --build --wait
 pnpm test
 pnpm build
 pnpm --filter @charge-station/api test:e2e

@@ -272,18 +272,18 @@ function readStopReason(
 
 function deviceIdForSession(session: ChargingSession): string {
   const mapped = session.connector?.station?.deviceId;
-  const configured = process.env.IOT_CORE_DEVICE_ID?.trim();
+  const configured = process.env.IOT_NANO_DEVICE_ID?.trim();
   if (typeof mapped === "string" && mapped) {
     return mapped;
   }
   if (configured) {
     return configured;
   }
-  throw new BadRequestException("Charging session has no Core IoT device mapping");
+  throw new BadRequestException("Charging session has no IoT Nano device mapping");
 }
 
 function relayIdFromEnvironment(): string {
-  return process.env.IOT_CORE_RELAY_ID?.trim() || "relay-1";
+  return process.env.IOT_NANO_RELAY_ID?.trim() || "relay-1";
 }
 
 async function lockChargingSessionId(

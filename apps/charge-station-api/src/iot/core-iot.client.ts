@@ -52,7 +52,7 @@ const MAX_TELEMETRY_PAGES = 20;
 export class CoreIotClient {
   async isHealthy(): Promise<boolean> {
     try {
-      await this.requestJson("/api/v1/devices?limit=1", { method: "GET" }, "probe Core IoT");
+      await this.requestJson("/api/v1/devices?limit=1", { method: "GET" }, "probe IoT Nano");
       return true;
     } catch {
       return false;
@@ -187,7 +187,7 @@ export class CoreIotClient {
       }
       if (state === "expired" || state === "failed") {
         throw new CoreIotCommandRejectedError(
-          `Core command ${commandId} ended in ${state}`,
+          `IoT Nano command ${commandId} ended in ${state}`,
         );
       }
       if (Date.now() >= deadline) {
@@ -197,7 +197,7 @@ export class CoreIotClient {
     } while (Date.now() < deadline);
 
     throw new CoreIotTransportError(
-      `Core command ${commandId} did not respond before timeout`,
+      `IoT Nano command ${commandId} did not respond before timeout`,
     );
   }
 
@@ -218,52 +218,52 @@ export class CoreIotClient {
         signal: AbortSignal.timeout(commandTimeoutMs()),
       });
     } catch {
-      throw new CoreIotTransportError(`Unable to ${description} through Core IoT`);
+      throw new CoreIotTransportError(`Unable to ${description} through IoT Nano`);
     }
     if (!response.ok) {
       if (response.status >= 500) {
         throw new CoreIotTransportError(
-          `Core IoT ${description} failed: ${response.status}`,
+          `IoT Nano ${description} failed: ${response.status}`,
         );
       }
       throw new CoreIotCommandRejectedError(
-        `Core IoT ${description} rejected: ${response.status}`,
+        `IoT Nano ${description} rejected: ${response.status}`,
       );
     }
     try {
       return await response.json();
     } catch {
       throw new CoreIotCommandRejectedError(
-        `Core IoT ${description} returned invalid JSON`,
+        `IoT Nano ${description} returned invalid JSON`,
       );
     }
   }
 
   private baseUrl(): URL {
-    const configured = process.env.IOT_CORE_PUBLIC_URL?.trim();
+    const configured = process.env.IOT_NANO_API_URL?.trim();
     if (!configured) {
-      throw new Error("IOT_CORE_PUBLIC_URL must be configured");
+      throw new Error("IOT_NANO_API_URL must be configured");
     }
     let url: URL;
     try {
       url = new URL(configured);
     } catch {
-      throw new Error("IOT_CORE_PUBLIC_URL must be an absolute HTTP URL");
+      throw new Error("IOT_NANO_API_URL must be an absolute HTTP URL");
     }
     if (
       !["http:", "https:"].includes(url.protocol) ||
       url.username ||
       url.password
     ) {
-      throw new Error("IOT_CORE_PUBLIC_URL must be an absolute HTTP URL");
+      throw new Error("IOT_NANO_API_URL must be an absolute HTTP URL");
     }
     return url;
   }
 
   private accessToken(): string {
-    const token = process.env.IOT_CORE_ACCESS_TOKEN?.trim();
+    const token = process.env.IOT_NANO_PAT?.trim();
     if (!token) {
-      throw new Error("IOT_CORE_ACCESS_TOKEN must be configured");
+      throw new Error("IOT_NANO_PAT must be configured");
     }
     return token;
   }
@@ -352,7 +352,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function commandTimeoutMs(): number {
   return envMilliseconds(
-    "IOT_CORE_COMMAND_TIMEOUT_MS",
+    "IOT_NANO_COMMAND_TIMEOUT_MS",
     DEFAULT_COMMAND_TIMEOUT_MS,
     MAX_COMMAND_TIMEOUT_MS,
   );
@@ -360,7 +360,7 @@ function commandTimeoutMs(): number {
 
 function commandPollMs(): number {
   return envMilliseconds(
-    "IOT_CORE_COMMAND_POLL_MS",
+    "IOT_NANO_COMMAND_POLL_MS",
     DEFAULT_COMMAND_POLL_MS,
     MAX_COMMAND_POLL_MS,
   );

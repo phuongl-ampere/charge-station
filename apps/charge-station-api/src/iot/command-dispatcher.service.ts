@@ -691,7 +691,7 @@ export class CommandDispatcherService
       healthy = await this.coreIotClient.isHealthy();
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`Unable to probe Core IoT health: ${message}`);
+      this.logger.warn(`Unable to probe IoT Nano health: ${message}`);
     }
 
     if (!healthy) {
@@ -863,7 +863,7 @@ function readOptionalString(
 }
 
 function relayIdFromEnvironment(): string {
-  return process.env.IOT_CORE_RELAY_ID?.trim() || "relay-1";
+  return process.env.IOT_NANO_RELAY_ID?.trim() || "relay-1";
 }
 
 function eventFor(

@@ -300,9 +300,9 @@ def run() -> None:
     import paho.mqtt.client as mqtt
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    host = os.environ["IOT_CORE_MQTT_HOST"]
-    port = int(os.environ["IOT_CORE_MQTT_PORT"])
-    device_token = os.environ["IOT_CORE_DEVICE_TOKEN"]
+    host = os.environ["IOT_NANO_MQTT_HOST"]
+    port = int(os.environ["IOT_NANO_MQTT_PORT"])
+    device_token = os.environ["IOT_NANO_DEVICE_TOKEN"]
     telemetry_interval_seconds = float(
         os.environ["IOT_SIMULATOR_TELEMETRY_INTERVAL_SECONDS"]
     )
@@ -312,7 +312,7 @@ def run() -> None:
     readiness = RpcSubscriptionReadiness(
         Path(
             os.environ.get(
-                "IOT_SIMULATOR_READINESS_FILE", "/tmp/core-iot-device-simulator.ready"
+                "IOT_SIMULATOR_READINESS_FILE", "/tmp/iot-nano-device-simulator.ready"
             )
         )
     )

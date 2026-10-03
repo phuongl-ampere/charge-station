@@ -1217,7 +1217,7 @@ function paymentReservationTtlMinutes(): number {
 }
 
 function relayIdFromEnvironment(): string {
-  return process.env.IOT_CORE_RELAY_ID?.trim() || "relay-1";
+  return process.env.IOT_NANO_RELAY_ID?.trim() || "relay-1";
 }
 
 function cancellationRetryDelay(attempts: number): number {

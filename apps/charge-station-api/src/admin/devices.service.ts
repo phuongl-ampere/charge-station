@@ -142,7 +142,7 @@ export class DevicesService {
       });
     } catch (error) {
       if (error instanceof CoreIotTransportError) {
-        throw new ServiceUnavailableException("Core IoT relay control unavailable");
+        throw new ServiceUnavailableException("IoT Nano relay control unavailable");
       }
       throw error;
     }

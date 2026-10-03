@@ -848,7 +848,7 @@ describe("CommandDispatcherService", () => {
       setRelay: vi
         .fn()
         .mockRejectedValue(
-          new CoreIotCommandRejectedError("Core IoT rejected command"),
+          new CoreIotCommandRejectedError("IoT Nano rejected command"),
         ),
     };
     const service = new CommandDispatcherService(
@@ -858,7 +858,7 @@ describe("CommandDispatcherService", () => {
     const wait = vi.spyOn(service as never, "wait" as never);
 
     await expect(service.dispatch(command.commandId)).rejects.toThrow(
-      "Core IoT rejected command",
+      "IoT Nano rejected command",
     );
 
     expect(iotClient.setRelay).toHaveBeenCalledTimes(1);

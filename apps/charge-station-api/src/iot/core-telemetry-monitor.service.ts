@@ -213,7 +213,7 @@ function readString(
 
 function telemetryStaleMs(): number {
   return envMilliseconds(
-    "IOT_CORE_TELEMETRY_STALE_MS",
+    "IOT_NANO_TELEMETRY_STALE_MS",
     DEFAULT_TELEMETRY_STALE_MS,
     MAX_TELEMETRY_STALE_MS,
   );
@@ -221,7 +221,7 @@ function telemetryStaleMs(): number {
 
 function telemetryPollMs(): number {
   return envMilliseconds(
-    "IOT_CORE_TELEMETRY_POLL_MS",
+    "IOT_NANO_TELEMETRY_POLL_MS",
     DEFAULT_TELEMETRY_POLL_MS,
     MAX_TELEMETRY_POLL_MS,
   );

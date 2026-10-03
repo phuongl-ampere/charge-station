@@ -65,7 +65,7 @@ describe("database seed lifecycle", () => {
       .findOneBy({ code: "ST01-C01" });
     const migrations = await dataSource.query('SELECT * FROM "migrations"');
 
-    expect(migrations).toHaveLength(8);
+    expect(migrations).toHaveLength(12);
     expect(station).toMatchObject({
       code: "ST01",
       name: "Demo Station",
@@ -87,12 +87,12 @@ describe("database seed lifecycle", () => {
     expect(await dataSource.getRepository(Connector).count()).toBe(1);
   });
 
-  it("updates the existing ST01 mapping from IOT_CORE_DEVICE_ID", async () => {
+  it("updates the existing ST01 mapping from IOT_NANO_DEVICE_ID", async () => {
     const mappingDataSource = createPgMemDataSource();
-    const priorDeviceId = process.env.IOT_CORE_DEVICE_ID;
+    const priorDeviceId = process.env.IOT_NANO_DEVICE_ID;
     try {
       await seedDatabase(mappingDataSource);
-      process.env.IOT_CORE_DEVICE_ID = "isolated-core-device";
+      process.env.IOT_NANO_DEVICE_ID = "isolated-nano-device";
       await seedDatabase(mappingDataSource);
       await mappingDataSource.initialize();
 
@@ -100,12 +100,12 @@ describe("database seed lifecycle", () => {
         mappingDataSource
           .getRepository(Station)
           .findOneByOrFail({ code: "ST01" }),
-      ).resolves.toMatchObject({ deviceId: "isolated-core-device" });
+      ).resolves.toMatchObject({ deviceId: "isolated-nano-device" });
     } finally {
       if (priorDeviceId === undefined) {
-        delete process.env.IOT_CORE_DEVICE_ID;
+        delete process.env.IOT_NANO_DEVICE_ID;
       } else {
-        process.env.IOT_CORE_DEVICE_ID = priorDeviceId;
+        process.env.IOT_NANO_DEVICE_ID = priorDeviceId;
       }
       if (mappingDataSource.isInitialized) {
         await mappingDataSource.destroy();

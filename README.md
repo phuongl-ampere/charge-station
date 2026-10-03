@@ -1,7 +1,7 @@
 # Charge Station MVP
 
-Local EV charging checkout with a mock PayOS payment flow and direct isolated
-Core IoT integration. The Core-connected simulator, not the browser or API
+Local EV charging checkout with a mock PayOS payment flow and direct IoT Nano
+integration. The Nano-connected simulator, not the browser or API
 timer, owns relay start and stop.
 
 Current architecture, status rules, API inventory, setup and known limits are
@@ -9,25 +9,28 @@ documented in [docs/architecture.md](docs/architecture.md).
 
 ## Run locally
 
-Start the isolated Core first, then use the safe harness described in [local
-development](docs/local-development.md). It provisions or reuses a Core device,
-keeps its MQTT token in a private temporary file, starts Compose, and verifies a
-full charging start/stop flow:
+Start IoT Nano at `http://127.0.0.1:18081`, then provision the dedicated
+`tenant-cs` demo tenant. The seed writes the tenant PAT and device token to an
+ignored, owner-only file for Compose:
 
 ```sh
-pnpm tsx scripts/core-iot-local-e2e.ts
+IOT_NANO_SYSTEM_USERNAME='<system username>' \
+IOT_NANO_SYSTEM_PASSWORD='<system password>' \
+IOT_NANO_TENANT_PASSWORD='<tenant-cs password>' \
+IOT_NANO_CS_ADMIN_PASSWORD='<cs-admin password>' \
+IOT_NANO_CS_OPERATOR_PASSWORD='<cs-operator password>' \
+pnpm seed:iot-nano
+docker compose --env-file .charge-station-iot-nano.env up -d --build --wait
 ```
 
-The harness requires the approved isolated-Core credentials in its invoking
-environment; do not put them in this repository or a checked-in `.env` file. It
-uses its own Compose project with API port `4100` and web port `3110`, so it can
-run alongside a manually started local stack.
+The seed requires system credentials only to create the isolated tenant. Do not
+commit any resulting token, password, or `.charge-station-iot-nano.env` file.
 
-Open `http://127.0.0.1:3110/admin`, create or select a station, then open its
+Open `http://127.0.0.1:3100/admin`, create or select a station, then open its
 opaque Station QR URL. The local mock checkout is served by the API and
 requires no PayOS account or external request.
 
-The operations console is at `http://127.0.0.1:3110/admin`. Compose seeds the
+The operations console is at `http://127.0.0.1:3100/admin`. Compose seeds the
 configured local admin account:
 
 ```text
@@ -48,11 +51,11 @@ Set a unique `STATION_QR_ENCRYPTION_KEY` for every non-local environment.
 | Web                | `http://localhost:3100`                                               |
 | Charge Station API | `http://localhost:4000`                                               |
 | API health         | `http://localhost:4000/health`                                        |
-| Core IoT           | API: `host.docker.internal:18090`; MQTT: `host.docker.internal:18893` |
+| IoT Nano           | API: `host.docker.internal:18081`; MQTT: `host.docker.internal:18883` |
 | PostgreSQL         | `postgres://charge:charge@localhost:5432/charge_station`              |
 
 Stop services with `docker compose down`.
 
-See [local development](docs/local-development.md) for safe Core credential
+See [local development](docs/local-development.md) for safe IoT Nano credential
 setup, direct command/telemetry flow verification, signed mock webhook testing,
 PayOS payment-link recovery, and sandbox or production callback requirements.

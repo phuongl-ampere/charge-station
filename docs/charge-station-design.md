@@ -13,16 +13,16 @@ The MVP price is 5,000 VND per hour. The backend always calculates the price and
 
 ## Scope and Services
 
-The system consists of the Charge Station application and an isolated Core IoT
-deployment.
+The system consists of the Charge Station application and its dedicated IoT Nano
+tenant.
 
 | Service                     | Technology                                            | Responsibilities                                                                                                                             |
 | --------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `charge-station`            | Next.js frontend, NestJS backend, TypeORM, PostgreSQL | Web checkout, station and connector management, orders, PayOS payments, charging sessions, realtime updates, and Core command orchestration. |
-| Core IoT                    | Isolated Core public API, management API, and MQTT    | Authenticated two-way commands, relay device connectivity, and telemetry retention.                                                          |
-| `core-iot-device-simulator` | Python MQTT sidecar                                   | Isolated local relay simulation and periodic telemetry publication.                                                                          |
+| `charge-station`            | Next.js frontend, NestJS backend, TypeORM, PostgreSQL | Web checkout, station and connector management, orders, PayOS payments, charging sessions, realtime updates, and IoT Nano command orchestration. |
+| IoT Nano                    | Tenant-scoped public API, management API, and MQTT    | Authenticated two-way commands, relay device connectivity, and telemetry retention.                                                          |
+| `iot-nano-device-simulator` | Python MQTT sidecar                                   | Tenant-scoped local relay simulation and periodic telemetry publication.                                                                     |
 
-`charge-station` communicates with Core's public REST API; it never implements
+`charge-station` communicates with IoT Nano's public REST API; it never implements
 the relay protocol itself.
 
 ## Logical Architecture
@@ -33,25 +33,25 @@ Customer browser
   -> NestJS Charge Station API
        -> PostgreSQL
        -> PayOS API / PayOS webhook
-       -> Core public REST API
-              -> Core MQTT broker
+       -> IoT Nano public REST API
+              -> IoT Nano MQTT broker
                     -> Device / relay simulator
 ```
 
 NestJS uses Socket.IO to publish updates to the frontend. Charge Station marks
-commands accepted only after Core's two-way command response confirms the relay
-state, then uses Core telemetry for live measurements and operational state.
+commands accepted only after Nano's two-way command response confirms the relay
+state, then uses Nano telemetry for live measurements and operational state.
 
 ## Local Runtime
 
-Docker Compose runs PostgreSQL, Charge Station API, the Core MQTT simulator, and
-the Next.js web app locally. Core itself is deliberately external and isolated.
+Docker Compose runs PostgreSQL, Charge Station API, the Nano MQTT simulator, and
+the Next.js web app locally. IoT Nano itself is deliberately external.
 The API waits for PostgreSQL, runs migrations and the idempotent `ST01-C01`
 demo seed, then becomes healthy at `GET /health`.
 
 Browser-facing URLs use `localhost`: web at `http://localhost:3100` and API at
-`http://localhost:4000`. Compose reaches the isolated Core through
-`host.docker.internal:18090` for REST and `host.docker.internal:18893` for
+`http://localhost:4000`. Compose reaches IoT Nano through
+`host.docker.internal:18081` for REST and `host.docker.internal:18883` for
 MQTT. Local Compose defaults to `PAYOS_MODE=mock`, so payment-link creation and
 checkout make no external PayOS calls.
 
@@ -60,9 +60,9 @@ checkout make no external PayOS calls.
 The IoT device is the source of truth for relay state and timing:
 
 1. After payment, Charge Station sends `START_CHARGING` with `durationSeconds`.
-2. Core delivers the configuration to the device over MQTT.
+2. IoT Nano delivers the configuration to the device over MQTT.
 3. The device turns on the relay, counts down locally, and turns the relay off when time expires.
-4. The device publishes telemetry, which Core retains for Charge Station to monitor.
+4. The device publishes telemetry, which IoT Nano retains for Charge Station to monitor.
 
 The backend persists `startedAt` and `expectedEndAt` for UI display, monitoring connectivity, and reconciliation. This is an estimated UI value, not the safety mechanism that switches the relay off.
 
@@ -74,10 +74,10 @@ The backend persists `startedAt` and `expectedEndAt` for UI display, monitoring 
 4. The customer pays. PayOS sends a webhook to Charge Station.
 5. The backend verifies the signature, amount, and `orderCode`, processes the callback idempotently, and updates the order to `PAID`.
 6. The backend creates a `ChargingSession` in `PENDING`, records a `DeviceCommand`, and moves the session to `STARTING`.
-7. The backend submits a two-way `setRelay` command through Core's public API.
-8. Core returns a device response after the relay accepts the configuration.
+7. The backend submits a two-way `setRelay` command through IoT Nano's public API.
+8. IoT Nano returns a device response after the relay accepts the configuration.
 9. Charge Station updates the session to `CHARGING` and publishes the update to the frontend through Socket.IO.
-10. When the timer expires or the device receives a stop command, Core telemetry
+10. When the timer expires or the device receives a stop command, Nano telemetry
     confirms the relay state. The backend marks the session as `COMPLETED` or
     `CANCELLED`.
 
@@ -145,7 +145,7 @@ display and operational-control channel, not the IoT relay timer authority.
 `ADMIN` and `OPERATOR` JWT roles can read the operations APIs and request stop
 or retry-start actions. `CUSTOMER` tokens receive `403 Forbidden`. Stop and
 retry requests reuse the existing command dispatcher and device event flow;
-they never bypass Core IoT or alter the device-owned timer.
+they never bypass IoT Nano or alter the device-owned timer.
 
 | Method | Path                               | Purpose                                                              |
 | ------ | ---------------------------------- | -------------------------------------------------------------------- |
@@ -221,7 +221,7 @@ https://<public-api-host>/payments/payos/webhook
 
 Set `PAYOS_RETURN_URL` and `PAYOS_CANCEL_URL` to `https://<public-api-host>/payments/payos/return` and `https://<public-api-host>/payments/payos/cancel`. These public callback URLs cannot be `localhost`. Only the verified webhook activates charging; return and cancel are browser display redirects and cannot change payment or charging state.
 
-## Direct Core IoT Contract
+## Direct IoT Nano Contract
 
 Charge Station uses Core's authenticated public API. A charging start creates a
 two-way `setRelay` command at
@@ -291,6 +291,6 @@ If Socket.IO disconnects, the frontend polls `GET /orders/:id` and `GET /session
 
 ## MVP Scope
 
-The MVP includes QR-to-payment, PayOS sandbox support, one 5,000 VND/hour pricing rule, Socket.IO, direct Core IoT integration, one relay/connector per charging session, and a minimal status dashboard.
+The MVP includes QR-to-payment, PayOS sandbox support, one 5,000 VND/hour pricing rule, Socket.IO, direct IoT Nano integration, one relay/connector per charging session, and a minimal status dashboard.
 
 It excludes automated refunds, multiple pricing plans, reservations, offline payments, power sharing, and firmware management.

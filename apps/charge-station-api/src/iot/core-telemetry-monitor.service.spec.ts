@@ -351,8 +351,8 @@ describe("CoreTelemetryMonitor", () => {
   });
 
   it("falls back to a positive polling default for a fractional interval", () => {
-    const priorInterval = process.env.IOT_CORE_TELEMETRY_POLL_MS;
-    process.env.IOT_CORE_TELEMETRY_POLL_MS = "0.5";
+    const priorInterval = process.env.IOT_NANO_TELEMETRY_POLL_MS;
+    process.env.IOT_NANO_TELEMETRY_POLL_MS = "0.5";
     try {
       const timer = { unref: vi.fn() } as unknown as ReturnType<
         typeof setInterval
@@ -372,9 +372,9 @@ describe("CoreTelemetryMonitor", () => {
       expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 15_000);
     } finally {
       if (priorInterval === undefined) {
-        delete process.env.IOT_CORE_TELEMETRY_POLL_MS;
+        delete process.env.IOT_NANO_TELEMETRY_POLL_MS;
       } else {
-        process.env.IOT_CORE_TELEMETRY_POLL_MS = priorInterval;
+        process.env.IOT_NANO_TELEMETRY_POLL_MS = priorInterval;
       }
     }
   });

@@ -5,6 +5,7 @@ coverage/
 *.tsbuildinfo
 .env
 .env.local
+.charge-station-iot-nano.env
 playwright-report/
 test-results/
 .worktrees/

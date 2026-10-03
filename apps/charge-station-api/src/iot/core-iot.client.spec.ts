@@ -4,17 +4,17 @@ import { CoreIotClient } from "./core-iot.client.js";
 
 describe("CoreIotClient", () => {
   afterEach(() => {
-    delete process.env.IOT_CORE_PUBLIC_URL;
-    delete process.env.IOT_CORE_ACCESS_TOKEN;
-    delete process.env.IOT_CORE_COMMAND_TIMEOUT_MS;
-    delete process.env.IOT_CORE_COMMAND_POLL_MS;
+    delete process.env.IOT_NANO_API_URL;
+    delete process.env.IOT_NANO_PAT;
+    delete process.env.IOT_NANO_COMMAND_TIMEOUT_MS;
+    delete process.env.IOT_NANO_COMMAND_POLL_MS;
     vi.unstubAllGlobals();
   });
 
   it("submits a two-way setRelay command and waits for the device response", async () => {
-    process.env.IOT_CORE_PUBLIC_URL = "http://core.test:18090";
-    process.env.IOT_CORE_ACCESS_TOKEN = "delegated-token";
-    process.env.IOT_CORE_COMMAND_POLL_MS = "1";
+    process.env.IOT_NANO_API_URL = "http://nano.test:18081";
+    process.env.IOT_NANO_PAT = "tenant-cs-pat";
+    process.env.IOT_NANO_COMMAND_POLL_MS = "1";
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -54,11 +54,11 @@ describe("CoreIotClient", () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "http://core.test:18090/api/v1/devices/core-device/commands",
+      "http://nano.test:18081/api/v1/devices/core-device/commands",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
-          authorization: "Bearer delegated-token",
+          authorization: "Bearer tenant-cs-pat",
           "idempotency-key": "charge-command",
         }),
       }),
@@ -76,8 +76,8 @@ describe("CoreIotClient", () => {
   });
 
   it("returns the latest Core telemetry item without inventing missing values", async () => {
-    process.env.IOT_CORE_PUBLIC_URL = "http://core.test:18090";
-    process.env.IOT_CORE_ACCESS_TOKEN = "delegated-token";
+    process.env.IOT_NANO_API_URL = "http://nano.test:18081";
+    process.env.IOT_NANO_PAT = "tenant-cs-pat";
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -164,8 +164,8 @@ describe("CoreIotClient", () => {
   });
 
   it("selects the newest valid telemetry event when Core returns newest-first pages", async () => {
-    process.env.IOT_CORE_PUBLIC_URL = "http://core.test:18090";
-    process.env.IOT_CORE_ACCESS_TOKEN = "delegated-token";
+    process.env.IOT_NANO_API_URL = "http://nano.test:18081";
+    process.env.IOT_NANO_PAT = "tenant-cs-pat";
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
