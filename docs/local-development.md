@@ -8,20 +8,21 @@ operational runbook for starting and stopping local services.
 
 - Docker Desktop with Compose v2.
 - Node.js 22 and pnpm 9 for host-side tests and builds.
-- An already-running IoT Nano platform at `http://127.0.0.1:18081` and MQTT
-  `127.0.0.1:18883`.
+- An already-running IoT Nano platform at `http://127.0.0.1:17180` and MQTT
+  `127.0.0.1:17183`.
 
 Published Charge Station ports bind to `127.0.0.1`. IoT Nano is external to
-this Compose project: the API reaches it through `host.docker.internal:18081`
-and the simulator reaches MQTT through `host.docker.internal:18883`.
+this Compose project: the API reaches it through `host.docker.internal:17180`
+and the simulator reaches MQTT through `host.docker.internal:17183`.
 
 ## Start the stack
 
 Supply the Nano system and local tenant passwords through the invoking shell;
 do not put them in this repository or a checked-in `.env` file. The seed
 creates or reuses the dedicated `tenant-cs` tenant, `cs-admin`, `cs-operator`,
-and its Charge Station device. It rotates the Tenant Account PAT and issues a
-device MQTT token, writing only those runtime secrets into the ignored
+and its Charge Station device. It assigns the device to `cs-admin`, rotates
+that normal user's User PAT, and issues a device MQTT token, writing only those
+runtime secrets into the ignored
 owner-only `.charge-station-iot-nano.env` file.
 
 ```sh
@@ -34,8 +35,9 @@ pnpm seed:iot-nano
 docker compose --env-file .charge-station-iot-nano.env up -d --build --wait
 ```
 
-The generated `IOT_NANO_PAT` has the same API authority as the Tenant Account
-and is scoped to `tenant-cs`; it cannot access devices in other tenants.
+The generated `IOT_NANO_PAT` is a User PAT for `cs-admin`. It can access only
+resources for which that user has permission; the seed assigns the Charge
+Station device to `cs-admin`.
 
 For subsequent manual Compose starts, reuse the generated secret file:
 
@@ -54,8 +56,8 @@ Pending persisted commands are scheduled asynchronously only after API health.
 | Web                | `http://localhost:3100`                                  |
 | Charge Station API | `http://localhost:4000`                                  |
 | API health         | `http://localhost:4000/health`                           |
-| IoT Nano API       | `http://host.docker.internal:18081` from Compose         |
-| IoT Nano MQTT      | `host.docker.internal:18883` from the simulator          |
+| IoT Nano API       | `http://host.docker.internal:17180` from Compose         |
+| IoT Nano MQTT      | `host.docker.internal:17183` from the simulator          |
 | PostgreSQL         | `postgres://charge:charge@localhost:5432/charge_station` |
 
 The API sends two-way REST commands to IoT Nano and monitors Nano telemetry. The
@@ -96,10 +98,10 @@ PAYMENT_REAPER_INTERVAL_MS=60000
 ADMIN_EMAIL=admin@charge.local
 ADMIN_PASSWORD=local-admin-password-change-me
 STATION_QR_ENCRYPTION_KEY=<64-character-hex-key>
-IOT_NANO_API_URL=http://127.0.0.1:18081
-IOT_NANO_PAT=<tenant-cs-personal-access-token>
-IOT_NANO_DEVICE_ID=<tenant-cs-device-id>
-IOT_NANO_DEVICE_TOKEN=<tenant-cs-device-token>
+IOT_NANO_API_URL=http://127.0.0.1:17180
+IOT_NANO_PAT=<charge-station-user-personal-access-token>
+IOT_NANO_DEVICE_ID=<charge-station-device-id>
+IOT_NANO_DEVICE_TOKEN=<charge-station-device-token>
 ```
 
 `IOT_NANO_PAT` and `IOT_NANO_DEVICE_TOKEN` are credentials. Keep them

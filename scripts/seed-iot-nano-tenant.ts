@@ -32,7 +32,7 @@ console.log(`Compose secrets written to ${outputPath}`);
 
 function seedConfig(): IotNanoTenantProvisioningConfig {
   return {
-    apiUrl: process.env.IOT_NANO_API_URL?.trim() || "http://127.0.0.1:18081",
+    apiUrl: process.env.IOT_NANO_API_URL?.trim() || "http://127.0.0.1:17180",
     deviceName: process.env.IOT_NANO_DEVICE_NAME?.trim() || "Charge Station Demo Device",
     deviceSerialNumber: process.env.IOT_NANO_DEVICE_SERIAL?.trim() || "CS-DEMO-001",
     operatorPassword: requiredEnvironment("IOT_NANO_CS_OPERATOR_PASSWORD"),

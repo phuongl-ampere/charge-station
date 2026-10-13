@@ -85,10 +85,10 @@ export async function provisionIotNanoTenant(
     await request(fetcher, apiUrl, "/api/v1/management/personal-access-token", {
       method: "POST",
       cookie: tenantCookie,
-      body: { name: "charge-station-api" },
+      body: { name: "charge-station-api", user_id: admin.id },
       allowedStatus: [201],
     }),
-    "tenant personal access token",
+    "user personal access token",
   );
   return {
     deviceId,

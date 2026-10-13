@@ -38,7 +38,7 @@ services:
       ADMIN_PASSWORD: local-admin-password-change-me
       STATION_QR_ENCRYPTION_KEY: 4d8eae9b3271c5f079cfb8b4f14ba3ca9d7e6a0b4c32f807c2d2ab5e983f1140
       FRONTEND_URL: ${CHARGE_STATION_WEB_ORIGIN:-http://localhost:3100}
-      IOT_NANO_API_URL: http://host.docker.internal:18081
+      IOT_NANO_API_URL: http://host.docker.internal:17180
       IOT_NANO_PAT: ${IOT_NANO_PAT:?Set IOT_NANO_PAT in the shell that starts Compose}
       IOT_NANO_DEVICE_ID: ${IOT_NANO_DEVICE_ID:?Set IOT_NANO_DEVICE_ID in the shell that starts Compose}
       IOT_NANO_RELAY_ID: ${IOT_NANO_RELAY_ID:-relay-1}
@@ -77,7 +77,7 @@ services:
       context: ./apps/core-iot-device-simulator
     environment:
       IOT_NANO_MQTT_HOST: host.docker.internal
-      IOT_NANO_MQTT_PORT: "18883"
+      IOT_NANO_MQTT_PORT: "17183"
       IOT_NANO_DEVICE_TOKEN: ${IOT_NANO_DEVICE_TOKEN:?Run the IoT Nano E2E harness or set IOT_NANO_DEVICE_TOKEN in the shell that starts Compose}
       IOT_SIMULATOR_TELEMETRY_INTERVAL_SECONDS: ${IOT_SIMULATOR_TELEMETRY_INTERVAL_SECONDS:-1}
       IOT_SIMULATOR_READINESS_FILE: /tmp/iot-nano-device-simulator.ready

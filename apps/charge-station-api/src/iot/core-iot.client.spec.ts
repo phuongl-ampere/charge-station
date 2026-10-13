@@ -12,8 +12,8 @@ describe("CoreIotClient", () => {
   });
 
   it("submits a two-way setRelay command and waits for the device response", async () => {
-    process.env.IOT_NANO_API_URL = "http://nano.test:18081";
-    process.env.IOT_NANO_PAT = "tenant-cs-pat";
+    process.env.IOT_NANO_API_URL = "http://nano.test:17180";
+    process.env.IOT_NANO_PAT = "charge-station-user-pat";
     process.env.IOT_NANO_COMMAND_POLL_MS = "1";
     const fetchMock = vi
       .fn()
@@ -54,11 +54,11 @@ describe("CoreIotClient", () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "http://nano.test:18081/api/v1/devices/core-device/commands",
+      "http://nano.test:17180/api/v1/devices/core-device/commands",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
-          authorization: "Bearer tenant-cs-pat",
+          authorization: "Bearer charge-station-user-pat",
           "idempotency-key": "charge-command",
         }),
       }),
@@ -76,8 +76,8 @@ describe("CoreIotClient", () => {
   });
 
   it("returns the latest Core telemetry item without inventing missing values", async () => {
-    process.env.IOT_NANO_API_URL = "http://nano.test:18081";
-    process.env.IOT_NANO_PAT = "tenant-cs-pat";
+    process.env.IOT_NANO_API_URL = "http://nano.test:17180";
+    process.env.IOT_NANO_PAT = "charge-station-user-pat";
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -164,8 +164,8 @@ describe("CoreIotClient", () => {
   });
 
   it("selects the newest valid telemetry event when Core returns newest-first pages", async () => {
-    process.env.IOT_NANO_API_URL = "http://nano.test:18081";
-    process.env.IOT_NANO_PAT = "tenant-cs-pat";
+    process.env.IOT_NANO_API_URL = "http://nano.test:17180";
+    process.env.IOT_NANO_PAT = "charge-station-user-pat";
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(

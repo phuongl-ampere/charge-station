@@ -17,15 +17,16 @@ Admin browser / customer QR browser
              │                         │
              │ OAuth REST              │ stations, connectors, orders,
              ▼                         │ payments, sessions, events,
- IoT Nano public API (18081)            │ managed device registry
+ IoT Nano public API (17180)            │ managed device registry
              │ MQTT                     │
              ▼                         │
- Charge-device simulator (18883) ───────┘
+ Charge-device simulator (17183) ───────┘
 ```
 
 IoT Nano is external to Docker Compose. The API uses its public REST API with
-a Tenant Account PAT scoped to `tenant-cs`. The simulator is the only Charge
-Station component that uses the Nano MQTT device token.
+a User PAT for the normal user that owns the Charge Station device. The
+simulator is the only Charge Station component that uses the Nano MQTT device
+token.
 
 ## Ownership
 
@@ -129,7 +130,7 @@ There are intentionally no Device `occupy`, `release`, or `hold` endpoints.
 ## Local installation and start
 
 Prerequisites: Docker Desktop/Compose v2, Node 22, pnpm 9, and IoT Nano
-listening on `127.0.0.1:18081` with MQTT `:18883`.
+listening on `127.0.0.1:17180` with MQTT `:17183`.
 
 1. Start and verify IoT Nano.
 2. Supply runtime-only Nano credentials; never put them in Git or `.env`.
@@ -173,8 +174,9 @@ The PostgreSQL integration suite requires a running local PostgreSQL service.
 
 ## Known limits / incomplete work
 
-- Tenant Account PATs are rotated by the local seed. Production deployment must
-  provision and rotate its own tenant-scoped credential.
+- User PATs are rotated by the local seed. Production deployment must provision
+  and rotate its own user-scoped credential, and that user must own or manage
+  the configured device.
 - Relay controls are a local technical demo. They are not a substitute for the
   charging payment/session lifecycle.
 - Core runtime state and credentials are local-only operational assets, not

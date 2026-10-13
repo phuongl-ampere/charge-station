@@ -51,7 +51,7 @@ demo seed, then becomes healthy at `GET /health`.
 
 Browser-facing URLs use `localhost`: web at `http://localhost:3100` and API at
 `http://localhost:4000`. Compose reaches IoT Nano through
-`host.docker.internal:18081` for REST and `host.docker.internal:18883` for
+`host.docker.internal:17180` for REST and `host.docker.internal:17183` for
 MQTT. Local Compose defaults to `PAYOS_MODE=mock`, so payment-link creation and
 checkout make no external PayOS calls.
 

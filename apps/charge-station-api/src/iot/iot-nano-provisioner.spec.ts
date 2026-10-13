@@ -50,14 +50,14 @@ describe("provisionIotNanoTenant", () => {
       }
       if (url.pathname === "/api/v1/management/personal-access-token") {
         expect(init?.method).toBe("POST");
-        expect(body).toEqual({ name: "charge-station-api" });
-        return json(201, { secret: "tenant-pat" });
+        expect(body).toEqual({ name: "charge-station-api", user_id: "cs-admin-id" });
+        return json(201, { secret: "user-pat" });
       }
       throw new Error(`Unexpected request: ${url.pathname} ${init?.method}`);
     });
 
     await expect(provisionIotNanoTenant({
-      apiUrl: "http://127.0.0.1:18081",
+      apiUrl: "http://127.0.0.1:17180",
       deviceName: "Charge Station Demo Device",
       deviceSerialNumber: "CS-DEMO-001",
       operatorPassword: "operator-password",
@@ -72,7 +72,7 @@ describe("provisionIotNanoTenant", () => {
     }, fetcher)).resolves.toEqual({
       deviceId: "charge-device-id",
       deviceToken: "device-token",
-      pat: "tenant-pat",
+      pat: "user-pat",
     });
   });
 });

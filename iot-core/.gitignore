@@ -1,0 +1,5 @@
+# Local Core runtime: never commit the database, vault, TLS key, cookies, or binary.
+iot-nano-monolith
+run-iot-core.sh
+runtime/
+README.md
